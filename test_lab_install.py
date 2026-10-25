@@ -31,7 +31,7 @@ class LabInstallTests(unittest.TestCase):
              "supported_in_api": True, "multi_agent_version": "v2"},
             {"slug": c.LAB_CPR_MODEL, "display_name": "must-not-replace-provider", "visibility": "list"},
         ]
-        with mock.patch.object(c, "state_directory", return_value=self.root), \\
+        with mock.patch.object(c, "state_directory", return_value=self.root), \
                 mock.patch.object(c, "builtin_catalog", return_value=official):
             catalog = c.native_catalog(connection, [str(self.root / "fixture-codex")], v1_only=True)
         models = json.loads(catalog.read_text(encoding="utf-8"))["models"]
@@ -49,7 +49,7 @@ class LabInstallTests(unittest.TestCase):
 
     def test_native_catalog_refuses_to_replace_builtins_when_official_catalog_is_unavailable(self):
         connection = {"catalog_source": str(Path(__file__).parent / "model_catalog.json")}
-        with mock.patch.object(c, "state_directory", return_value=self.root), \\
+        with mock.patch.object(c, "state_directory", return_value=self.root), \
                 mock.patch.object(c, "builtin_catalog", return_value=[]):
             with self.assertRaisesRegex(ValueError, "官方模型继续消失"):
                 c.native_catalog(connection, [str(self.root / "fixture-codex")], v1_only=True)
