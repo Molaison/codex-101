@@ -1101,11 +1101,19 @@ def lab_client_path(binary):
     return entry
 
 
+class SQLiteMigrationDeferred(ValueError):
+    """No source/destination DB has been overwritten; keep using the active source."""
+
+    def __init__(self, reason, message):
+        self.reason = reason
+        super().__init__(message)
+
+
 def migrate_sqlite_when_idle(source, dest):
     """Keep old DB/WAL/SHM untouched; only publish a complete stopped-writer copy."""
     if source != dest and (source / "state_5.sqlite").is_file():
         if dest.exists() and any(dest.iterdir()):
-            raise ValueError("SQLite 新旧目录均有数据；未覆盖或混库。请维护者确定使用哪一份。")
+            raise SQLiteMigrationDeferred("CONFLICT", "SQLite 新旧目录均有数据；未覆盖或混库。")
         # Do not migrate while any of this user's Codex processes might write WAL.
         def ensure_idle():
             if os.name == "nt":
@@ -1119,7 +1127,7 @@ def migrate_sqlite_when_idle(source, dest):
                 running = any(re.search(r"(^|/)(codex|codex-cli)(-.*)?$", line.strip())
                               for line in result.stdout.splitlines())
             if running:
-                raise ValueError("发现当前用户仍有 Codex 进程；未迁移 SQLite。结束任务后重跑同一安装命令。")
+                raise SQLiteMigrationDeferred("BUSY", "当前用户仍有 Codex 进程；暂不复制可能正在写入的 SQLite。")
         ensure_idle()
         staging = Path(tempfile.mkdtemp(prefix=".codex-sqlite-", dir=str(dest.parent)))
         try:
@@ -1135,7 +1143,7 @@ def migrate_sqlite_when_idle(source, dest):
             ensure_idle()
             if any(not f.exists() or (f.stat().st_size, f.stat().st_mtime_ns) != stat
                    for f, stat in originals.items()):
-                raise ValueError("SQLite 源文件在迁移期间发生变化；未切换目录。")
+                raise SQLiteMigrationDeferred("CHANGED", "迁移过程中 SQLite 文件发生变化；已放弃本次复制。")
             if dest.is_dir() and not any(dest.iterdir()):
                 dest.rmdir()
             staging.rename(dest)
@@ -1146,21 +1154,67 @@ def migrate_sqlite_when_idle(source, dest):
         secure_directory(dest)
 
 
-def lab_sqlite_home():
-    """Use an OS-local temp directory; preserve CODEX_HOME and existing sessions."""
+def lab_sqlite_choice(value):
+    """Explicitly select one DB location without copying, mixing or deleting either."""
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise ValueError("--sqlite-home 必须是绝对路径；请复制诊断中列出的完整目录路径。")
+    if path.is_symlink():
+        raise ValueError("--sqlite-home 指向符号链接；请使用实际目录，未切换 SQLite。")
+    path = path.resolve()
+    if path.exists() and not path.is_dir():
+        raise ValueError("--sqlite-home 不是目录：%s；未切换 SQLite。" % path)
+    secure_directory(path)
+    os.environ["CODEX_SQLITE_HOME"] = str(path)
+    print("[SQLITE_SELECTED] 使用 %s；不会复制、覆盖或合并另一份数据库。" % path, file=sys.stderr)
+    return str(path)
+
+
+def lab_sqlite_switch_command(path):
+    """A complete, copyable install command for selecting a different existing DB."""
+    url = "https://raw.githubusercontent.com/Molaison/codex-101/main/"
+    if os.name == "nt":
+        literal = str(path).replace("'", "''")
+        return ("& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing '" +
+                url + "install.ps1').Content)) -Lab -SqliteHome '" + literal + "'")
+    return ("(set -o pipefail; curl --http1.1 -fsSL --retry 2 " + url +
+            "install.sh | bash -s -- --lab --sqlite-home " + shlex.quote(str(path)) + ")")
+
+
+def lab_sqlite_home(preferred=None):
+    """Migrate only when safe; otherwise retain the currently selected source."""
+    # An explicit selection is a switch, never a migration. The env override
+    # must win over config.toml or users cannot recover from an old config.
+    explicit = preferred or os.environ.get("CODEX_SQLITE_HOME")
+    if explicit:
+        return lab_sqlite_choice(explicit)
     if sys.platform.startswith("linux"):
         import pwd
         parent = Path("/tmp") / pwd.getpwuid(os.getuid()).pw_name
     else:
-        import getpass
         parent = Path(tempfile.gettempdir()) / getpass.getuser() / "codex-lab"
     dest = parent / "codex-sqlite"
     if parent.is_symlink() or dest.is_symlink():
         raise ValueError("SQLite 临时目录是符号链接；拒绝迁移。")
     secure_directory(parent)
-    current = provider_settings().get("sqlite_home") or os.environ.get("CODEX_SQLITE_HOME")
-    source = Path(current).expanduser() if current else state_directory().parent
-    migrate_sqlite_when_idle(source.resolve(), dest)
+    configured = provider_settings().get("sqlite_home")
+    source = (Path(configured).expanduser() if configured else state_directory().parent).resolve()
+    try:
+        migrate_sqlite_when_idle(source, dest)
+    except SQLiteMigrationDeferred as error:
+        # Codex is currently configured to use source (or defaults to
+        # CODEX_HOME). Keeping it is safer than guessing which DB is newer.
+        # No source or destination is removed, and no mixed WAL is published.
+        os.environ["CODEX_SQLITE_HOME"] = str(source)
+        print("[SQLITE_PRESERVED] %s" % error, file=sys.stderr)
+        print("保持原 SQLite 目录：%s；另一目录：%s。两份均未覆盖或合并。" %
+              (source, dest), file=sys.stderr)
+        if error.reason == "CONFLICT":
+            print("如需改用另一份数据库（不会合并历史），执行：\n  %s" %
+                  lab_sqlite_switch_command(dest), file=sys.stderr)
+        else:
+            print("如需迁移到临时目录，结束所有 Codex 任务后重跑原安装命令。", file=sys.stderr)
+        return str(source)
     os.environ["CODEX_SQLITE_HOME"] = str(dest)
     return str(dest)
 
@@ -1686,7 +1740,11 @@ def native_setup(arguments):
     parser.add_argument("--skip-check", action="store_true", help="只配置，返回2/NOT_VERIFIED，不报成功")
     parser.add_argument("--check", action="store_true", help="默认已执行真实只读工具自检")
     parser.add_argument("--lab", "--lab-ywl", action="store_true", help="跨平台实验室预设：只输入 Key、官方客户端、本地 SQLite、V1-only、全权限、SSE")
+    parser.add_argument("--sqlite-home", metavar="ABSOLUTE_PATH",
+                        help="显式选用该 SQLite 目录，不复制或合并另一份数据；仅适用于 --lab")
     args = parser.parse_args(arguments)
+    if args.sqlite_home and not args.lab:
+        parser.error("--sqlite-home 只能与 --lab 一起使用")
     if args.skip_check and args.check:
         parser.error("--skip-check 与 --check 不能同时使用")
     if args.upgrade_codex and not args.lab:
@@ -1721,7 +1779,7 @@ def native_setup(arguments):
             print(json.dumps(result, ensure_ascii=False))
             return 1
         retry_failed = result["status"] == "failed"
-    lab_sqlite = lab_sqlite_home() if args.lab else None
+    lab_sqlite = lab_sqlite_home(args.sqlite_home) if args.lab else None
     binary = official_client(upgrade=args.upgrade_codex) if args.lab else native_client()
     options = []
     for name in ("url", "provider"):
