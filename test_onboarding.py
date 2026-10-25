@@ -361,7 +361,16 @@ class NativeIntegrationTests(unittest.TestCase):
         self.environment.start()
         self.addCleanup(self.environment.stop)
         self.connection = {"url": "https://fixture.invalid/v1", "api_key": "fixture-secret", "generation": "fixture-generation"}
-        self.catalog = connector.native_catalog(self.connection, ["fixture-codex"])
+        self.binary = ["fixture-codex"]
+        self.builtin_models = [
+            {"slug": "gpt-6-astra", "display_name": "GPT-6 Astra", "visibility": "list",
+             "supported_in_api": True, "multi_agent_version": "v2"},
+        ]
+        self.builtin_catalog_patch = mock.patch.object(
+            connector, "builtin_catalog", return_value=self.builtin_models)
+        self.builtin_catalog_patch.start()
+        self.addCleanup(self.builtin_catalog_patch.stop)
+        self.catalog = connector.native_catalog(self.connection, self.binary)
         self.expected = [m["slug"] for m in json.loads(self.catalog.read_text())["models"]
                          if m.get("visibility") == "list" and m.get("supported_in_api", True)]
 
@@ -571,18 +580,18 @@ class NativeIntegrationTests(unittest.TestCase):
     def test_catalog_updates_use_immutable_paths_and_do_not_fetch_upstream(self):
         old = self.catalog.read_bytes()
         with mock.patch.object(connector.urllib.request, "urlopen", side_effect=AssertionError("no upstream sync")):
-            self.assertEqual(connector.native_catalog(self.connection, []), self.catalog)
+            self.assertEqual(connector.native_catalog(self.connection, self.binary), self.catalog)
             source = self.home / "new-catalog.json"
             source.write_text(json.dumps({"models": [{"slug": "new-model", "visibility": "list"}]}))
             self.connection["catalog_source"] = str(source)
-            new = connector.native_catalog(self.connection, [])
+            new = connector.native_catalog(self.connection, self.binary)
         self.assertNotEqual(new, self.catalog)
         self.assertEqual(self.catalog.read_bytes(), old)
         self.assertEqual(new.stat().st_mode & 0o777, 0o600)
         source.write_text('{"models": []}')
         self.connection["catalog_source"] = str(source)
         with self.assertRaises(ValueError):
-            connector.native_catalog(self.connection, [])
+            connector.native_catalog(self.connection, self.binary)
         self.assertEqual(self.connection["catalog_file"], str(new))
 
     def test_explicit_existing_binary_does_not_replace_the_user_entry(self):
@@ -604,7 +613,7 @@ class NativeIntegrationTests(unittest.TestCase):
 
     def test_repair_owned_damaged_catalog_before_starting_native_rpc(self):
         self.catalog.write_text('{broken fixture')
-        recovered = connector.native_catalog(self.connection, [])
+        recovered = connector.native_catalog(self.connection, self.binary)
         self.assertEqual(recovered, self.catalog)
         self.assertTrue(self.connection["catalog_repaired"])
         self.assertEqual(json.loads(recovered.read_text())["models"][0]["slug"],
@@ -614,7 +623,7 @@ class NativeIntegrationTests(unittest.TestCase):
         outside = self.home / "unrelated-models.json"
         outside.write_text('{unrelated broken file')
         self.connection["catalog_file"] = str(outside)
-        connector.native_catalog(self.connection, [])
+        connector.native_catalog(self.connection, self.binary)
         self.assertEqual(outside.read_text(), '{unrelated broken file')
 
     def test_shell_installer_uses_private_native_setup_and_bundled_catalog(self):
