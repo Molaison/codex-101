@@ -176,6 +176,16 @@ class LabInstallTests(unittest.TestCase):
         self.assertEqual((source / "state_5.sqlite").read_bytes(), b"live")
         self.assertIn("[SQLITE_PRESERVED]", output.getvalue())
 
+    def test_cli_sqlite_home_flag_reaches_lab_selector(self):
+        chosen = str(self.root / "existing")
+        with mock.patch.object(c, "state_directory", return_value=self.root), \
+                mock.patch.object(c, "saved_connection", return_value=None), \
+                mock.patch.object(c, "lab_sqlite_home",
+                                  side_effect=ValueError("stop-before-network")) as select, \
+                self.assertRaisesRegex(ValueError, "stop-before-network"):
+            c.native_setup(["--lab", "--sqlite-home", chosen])
+        select.assert_called_once_with(chosen)
+
     def test_lab_mode_selects_official_client_and_passes_contract(self):
         catalog = self.root / "models.json"
         catalog.write_text(json.dumps({"models": [{"slug": c.LAB_CPR_MODEL, "visibility": "list"}]}))
