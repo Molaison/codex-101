@@ -8,19 +8,19 @@ install_failure() {
     shift
     local root="${CODEX_HOME:-$HOME/.codex}/provider-connect"
     if (( status == 2 )); then
-        printf '\\n[PENDING] 安装尚未确认 READY；可能仍有原自检正在运行。\\n' >&2
+        printf '\n[PENDING] 安装尚未确认 READY；可能仍有原自检正在运行。\n' >&2
     else
-        printf '\\n[NOT_READY] 安装未完成（退出码 %s）；旧数据未被安装器清理。\\n' "$status" >&2
+        printf '\n[NOT_READY] 安装未完成（退出码 %s）；旧数据未被安装器清理。\n' "$status" >&2
     fi
     if [[ -f "$root/install_lifecycle.py" ]]; then
-        printf '[NEXT] 查看安装状态（本地只读）：python3 %q status\\n' "$root/install_lifecycle.py" >&2
+        printf '[NEXT] 查看安装状态（本地只读）：python3 %q status\n' "$root/install_lifecycle.py" >&2
         if [[ -f "$root/pending.json" ]]; then
-            printf '[NEXT] 恢复同一事务（不盲目重投）：python3 %q recover\\n' "$root/install_lifecycle.py" >&2
+            printf '[NEXT] 恢复同一事务（不盲目重投）：python3 %q recover\n' "$root/install_lifecycle.py" >&2
         fi
     fi
-    printf '[NEXT] 排除上述错误原因后，可重新执行完整安装命令：\\n  (set -o pipefail; curl --http1.1 -fsSL --retry 2 https://raw.githubusercontent.com/Molaison/codex-101/main/install.sh | bash -s --' >&2
+    printf '[NEXT] 排除上述错误原因后，可重新执行完整安装命令：\n  (set -o pipefail; curl --http1.1 -fsSL --retry 2 https://raw.githubusercontent.com/Molaison/codex-101/main/install.sh | bash -s --' >&2
     printf ' %q' "$@" >&2
-    printf ')\\n' >&2
+    printf ')\n' >&2
 }
 
 main() {
