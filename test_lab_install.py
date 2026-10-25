@@ -6,6 +6,7 @@ import os
 import tempfile
 import getpass
 import contextlib
+import io
 import sys
 from types import SimpleNamespace
 import unittest
@@ -119,6 +120,61 @@ class LabInstallTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "仍有 Codex"):
                 c.migrate_sqlite_when_idle(source, dest)
         self.assertFalse((dest / "state_5.sqlite").exists())
+
+    def test_conflicting_sqlite_locations_reuse_configured_source_without_data_loss(self):
+        source = self.root / "old"
+        target = self.root / "system-tmp" / getpass.getuser() / "codex-lab" / "codex-sqlite"
+        source.mkdir()
+        target.mkdir(parents=True)
+        (source / "state_5.sqlite").write_bytes(b"existing-history")
+        (target / "state_5.sqlite").write_bytes(b"different-history")
+        output = io.StringIO()
+        with mock.patch.object(c.sys, "platform", "darwin"), \\
+                mock.patch.object(c.tempfile, "gettempdir", return_value=str(self.root / "system-tmp")), \\
+                mock.patch.object(c, "provider_settings", return_value={"sqlite_home": str(source)}), \\
+                mock.patch.dict(os.environ, {"CODEX_SQLITE_HOME": ""}), \\
+                contextlib.redirect_stderr(output):
+            chosen = c.lab_sqlite_home()
+            self.assertEqual(os.environ["CODEX_SQLITE_HOME"], str(source))
+        self.assertEqual(chosen, str(source))
+        self.assertEqual((source / "state_5.sqlite").read_bytes(), b"existing-history")
+        self.assertEqual((target / "state_5.sqlite").read_bytes(), b"different-history")
+        self.assertIn("[SQLITE_PRESERVED]", output.getvalue())
+        self.assertIn("--sqlite-home", output.getvalue())
+        self.assertIn(str(target), output.getvalue())
+
+    def test_explicit_sqlite_selection_overrides_config_and_never_migrates(self):
+        source = self.root / "old"
+        target = self.root / "new"
+        source.mkdir()
+        target.mkdir()
+        (source / "state_5.sqlite").write_bytes(b"old")
+        (target / "state_5.sqlite").write_bytes(b"new")
+        with mock.patch.object(c, "provider_settings", return_value={"sqlite_home": str(source)}), \\
+                mock.patch.object(c, "migrate_sqlite_when_idle", side_effect=AssertionError("unwanted copy")), \\
+                mock.patch.dict(os.environ, {"CODEX_SQLITE_HOME": str(target)}):
+            self.assertEqual(c.lab_sqlite_home(), str(target))
+            self.assertEqual(c.lab_sqlite_home(str(source)), str(source))
+            self.assertEqual(os.environ["CODEX_SQLITE_HOME"], str(source))
+        self.assertEqual((source / "state_5.sqlite").read_bytes(), b"old")
+        self.assertEqual((target / "state_5.sqlite").read_bytes(), b"new")
+        with self.assertRaisesRegex(ValueError, "绝对路径"):
+            c.lab_sqlite_choice("relative/path")
+
+    def test_running_codex_defers_migration_and_preserves_source(self):
+        source = self.root / "existing"
+        source.mkdir()
+        (source / "state_5.sqlite").write_bytes(b"live")
+        with mock.patch.object(c.sys, "platform", "darwin"), \\
+                mock.patch.object(c.tempfile, "gettempdir", return_value=str(self.root / "tmp")), \\
+                mock.patch.object(c, "provider_settings", return_value={"sqlite_home": str(source)}), \\
+                mock.patch.dict(os.environ, {"CODEX_SQLITE_HOME": ""}), \\
+                mock.patch.object(c.subprocess, "run", return_value=mock.Mock(stdout="codex\\n")), \\
+                contextlib.redirect_stderr(io.StringIO()) as output:
+            chosen = c.lab_sqlite_home()
+        self.assertEqual(chosen, str(source))
+        self.assertEqual((source / "state_5.sqlite").read_bytes(), b"live")
+        self.assertIn("[SQLITE_PRESERVED]", output.getvalue())
 
     def test_lab_mode_selects_official_client_and_passes_contract(self):
         catalog = self.root / "models.json"
