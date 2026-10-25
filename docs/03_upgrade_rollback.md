@@ -84,7 +84,7 @@ v0.1.1 遇到“SQLite 新旧目录均有数据”会硬中断，重复安装不
 - 复制范围为 `state_5.sqlite`、`memories_1.sqlite`、`goals_1.sqlite`、`queue_1.sqlite` 及各自存在的 `-wal` / `-shm`；源文件保留。这是文件级复制，不是数据库内容合并，也不是事务级备份工具。
 - 目标非空、检测到 Codex 进程或复制期间文件变化时，放弃迁移、继续沿用源库，打印 `[SQLITE_PRESERVED]`。两份数据均保留；发生目录冲突时还会打印选用另一目录的完整命令。
 
-**想改用另一份库时，显式选择绝对路径。** 在 README 安装命令末尾添加：
+**想改用另一份库时，显式选择绝对路径。** 修改 README 安装命令：Bash 参数必须放在 `--lab` 后、末尾的 `)` 前，不能追加到括号外；PowerShell 参数可加在末尾：
 
 - Bash：`--sqlite-home '/实际的/绝对路径'`
 - PowerShell：`-SqliteHome 'C:\实际目录'`

@@ -30,7 +30,7 @@
 
 **全权限风险：** `sandbox_mode="danger-full-access"`、`approval_policy="never"` 允许 Codex 操作当前用户能访问的文件，不会逐项请求批准。共享目录和项目以外的文件也在风险范围内；运行前检查工作目录并备份重要数据。
 
-**凭据风险：**隐藏输入和文件访问权限不是加密保险箱。不要把状态目录加入 Git、共享网盘或故障附件；仅分享检查过的脱敏诊断。更换 Key 时重跑安装命令，Bash 增加 `--reconfigure`，PowerShell 增加 `-Reconfigure`。
+**凭据风险：**隐藏输入和文件访问权限不是加密保险箱。不要把状态目录加入 Git、共享网盘或故障附件；仅分享检查过的脱敏诊断。更换 Key 时重跑安装命令：Bash 在 `--lab` 后、末尾的 `)` 前增加 `--reconfigure`；PowerShell 在末尾增加 `-Reconfigure`。
 
 ### SQLite 的默认位置
 
@@ -66,7 +66,7 @@
 
 `temp` **不等于服务端零留存或绝对隐私**。两种模式与 Codex 本地 sessions 分开；重要结论应写回项目文件。安装器不会为解决 readiness 问题自动从 `temp` 切到 `persist`，也不会自动开启 Memory。
 
-若明确接受保存 Web 账号聊天历史，可在 README 安装命令中追加：
+若明确接受保存 Web 账号聊天历史，可修改 README 安装命令。Bash 参数放在 `--lab` 后、末尾的 `)` 前，不能追加到括号外；PowerShell 参数可加在末尾：
 
 - Bash：`--model chatgpt-web/gpt-6-tools-persist`
 - PowerShell：`-Model 'chatgpt-web/gpt-6-tools-persist'`
