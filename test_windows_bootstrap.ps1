@@ -22,6 +22,8 @@ import json, os, sys
 from pathlib import Path
 assert sys.argv[1] == '_native-setup'
 assert '--lab' in sys.argv
+assert '--sqlite-home' in sys.argv
+assert sys.argv[sys.argv.index('--sqlite-home') + 1] == os.environ['CODEX_HOME']
 state=Path(os.environ['CODEX_HOME'])/'provider-connect'
 state.mkdir(parents=True,exist_ok=True)
 (state/'native-installation.json').write_text(json.dumps({'status':'passed','code':'READY'}))
@@ -48,7 +50,7 @@ sys.exit(0)
         Copy-Item -LiteralPath $Candidate -Destination $OutFile -Force
     }
 
-    & ([scriptblock]::Create((Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'install.ps1')))) -Lab
+    & ([scriptblock]::Create((Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'install.ps1')))) -Lab -SqliteHome $env:CODEX_HOME
     $Installed = Join-Path $env:LOCALAPPDATA 'codex-provider-connect\active.json'
     if (-not (Test-Path -LiteralPath $Installed)) { throw 'PowerShell bootstrap did not install active.json' }
     $Record = Get-Content -Raw -LiteralPath $Installed | ConvertFrom-Json
