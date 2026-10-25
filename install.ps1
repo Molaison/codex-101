@@ -1,13 +1,14 @@
 # Published at releases/latest/download/install.ps1; payloads stay on one release.
 # codex-provider-connect: user-local native Windows bootstrap; no administrator needed.
-param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [switch]$Repair, [switch]$Reconfigure, [switch]$RestartIfIdle, [switch]$Lab)
+param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHome, [switch]$Repair, [switch]$Reconfigure, [switch]$RestartIfIdle, [switch]$Lab)
 
 & {
-    param([string]$ProviderUrl, [string]$ModelId, [bool]$DoRepair, [bool]$DoReconfigure, [bool]$DoRestartIfIdle, [bool]$DoLab)
+    param([string]$ProviderUrl, [string]$ModelId, [string]$SelectedSqliteHome, [bool]$DoRepair, [bool]$DoReconfigure, [bool]$DoRestartIfIdle, [bool]$DoLab)
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     if (-not [Environment]::Is64BitOperatingSystem) { throw '64-bit Windows is required.' }
+    if ($SelectedSqliteHome -and -not $DoLab) { throw '-SqliteHome requires -Lab.' }
 
     $Release = $env:CODEX_CONNECT_REF
     if (-not $Release) {
@@ -103,6 +104,7 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [switch]$Repair, [
             if ($DoLab) { $SetupArguments += '--lab' }
             elseif ($ProviderUrl) { $SetupArguments += @('--url', $ProviderUrl) }
             if ($ModelId) { $SetupArguments += @('--model', $ModelId) }
+            if ($SelectedSqliteHome) { $SetupArguments += @('--sqlite-home', $SelectedSqliteHome) }
             & $Python -X utf8 $Manager --root $Root install `
                 --release $Release --payload-dir $PayloadDir -- @SetupArguments
             if ($LASTEXITCODE -ne 0) { throw 'Installation is not READY; run codex101 recover or inspect the staged transaction.' }
@@ -148,6 +150,7 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [switch]$Repair, [
         if ($DoLab) { $Arguments += '--lab' }
         elseif ($ProviderUrl) { $Arguments += @('--url', $ProviderUrl) }
         if ($ModelId) { $Arguments += @('--model', $ModelId) }
+        if ($SelectedSqliteHome) { $Arguments += @('--sqlite-home', $SelectedSqliteHome) }
         & $Python -X utf8 $Helper @Arguments
         if ($LASTEXITCODE -ne 0) { throw 'Setup is not verified. Re-run the same fixed download command; no READY was issued.' }
         if ($DoLab) {
@@ -180,4 +183,4 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [switch]$Repair, [
     finally {
         Remove-Item -LiteralPath $Temporary -Recurse -Force
     }
-} $Url $Model ([bool]$Repair) ([bool]$Reconfigure) ([bool]$RestartIfIdle) ([bool]$Lab)
+} $Url $Model $SqliteHome ([bool]$Repair) ([bool]$Reconfigure) ([bool]$RestartIfIdle) ([bool]$Lab)
