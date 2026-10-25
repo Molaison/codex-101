@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -46,6 +47,39 @@ def connection_state_root():
     # The Windows bootstrap payload lives in LOCALAPPDATA, while credentials,
     # checks and official Codex binaries live under CODEX_HOME/provider-connect.
     return Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "provider-connect"
+
+
+def recovery_command(root, action):
+    """Print a locally runnable command, including the right private install path."""
+    manager = Path(root) / "install_lifecycle.py"
+    if os.name == "nt":
+        python = Path(os.environ.get("CODEX_CONNECT_PYTHON",
+                                    str(Path(root) / "python" / "python.exe")))
+        quote = lambda value: "'" + str(value).replace("'", "''") + "'"
+        return "& %s -X utf8 %s %s" % (quote(python), quote(manager), action)
+    return "python3 %s %s" % (shlex.quote(str(manager)), action)
+
+
+def print_next_step(root):
+    """Never prescribe a new model submission before checking the saved transaction."""
+    root = Path(root)
+    if not (root / "install_lifecycle.py").is_file():
+        return
+    print("[NEXT] 本地状态（不提交模型请求）：%s" % recovery_command(root, "status"), file=sys.stderr)
+    pending = root / "pending.json"
+    if not pending.is_file():
+        return
+    try:
+        pointer = read_json(pending)
+        journal = read_json(root / "transactions" / pointer["id"] / "journal.json")
+    except (OSError, ValueError, KeyError):
+        print("[NEXT] 安装日志无法读取，先检查 %s；不要删除 pending.json。" % pending, file=sys.stderr)
+        return
+    if journal.get("stage") == "RECOVERY_REQUIRED":
+        print("[NEXT] 事务处于 RECOVERY_REQUIRED；请检查 %s，勿直接重复真实模型回合。" %
+              (root / "transactions" / pointer["id"] / "journal.json"), file=sys.stderr)
+    else:
+        print("[NEXT] 继续相同事务：%s" % recovery_command(root, "recover"), file=sys.stderr)
 
 
 def digest(path):
@@ -706,7 +740,10 @@ def main():
     args, rest = parser.parse_known_args()
     if args.command == "install":
         args.setup = rest[1:] if rest[:1] == ["--"] else rest
-        return install(args.root, args)
+        result = install(args.root, args)
+        if result:
+            print_next_step(args.root)
+        return result
     if rest:
         parser.error("unexpected arguments: %s" % rest)
     if args.command == "rollback":
@@ -733,4 +770,12 @@ if __name__ == "__main__":
         sys.exit(main())
     except (ValueError, OSError, KeyError, json.JSONDecodeError) as error:
         print("[INSTALL_ERROR] %s" % error, file=sys.stderr)
+        arguments = sys.argv[1:]
+        if "--root" in arguments and arguments.index("--root") + 1 < len(arguments):
+            root = Path(arguments[arguments.index("--root") + 1])
+        else:
+            custom = next((value.split("=", 1)[1] for value in arguments
+                           if value.startswith("--root=")), None)
+            root = Path(custom) if custom else root_path()
+        print_next_step(root)
         sys.exit(1)
