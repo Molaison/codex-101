@@ -1,83 +1,84 @@
-# CPR 真实验收：地址范围更正与交接
+# CPR 验收标准与历史证据
 
-## 结论
+**codex-101 v0.2.0 候选保持 preview 定位。现有记录不能证明默认 temp 模型、目标 HTTPS CPR 或 Windows / macOS / Linux 三平台用户环境均已通过真实验收。**
 
-**目标 HTTPS CPR 入口仍未完成真实工具调用验收，v0.1.0 保留预发布状态。**
+本文区分自动化测试、官方客户端启动检查和真实服务验收，避免用一种证据替代另一种。操作入口见 [README](../README.md)，中断处理见 [恢复手册](03_upgrade_rollback.md)。
 
-2026-10-22 00:36（香港时间）核对原生配置及两次自检的 `state.json` 后发现：**旧测试连接的是维护机内网 HTTP API，而不是安装器固定的 `https://cpr.molaisonz.dpdns.org/v1`。** 本页 10 月 21 日曾将这两次失败归到 HTTPS 入口，现更正这一归因；失败记录本身有效，但仅适用于原测试地址。
+## 什么才算 READY
 
-已从原会话引用的前序记录恢复**现有 ywl 内网 provider、`auth.command` 和官方客户端隔离环境**。这份配置及凭据可继续用于原地址验收，不需要用户重新提供。2026-10-22 已复用它完成一次新的真实只读调用，结果仍为 `UPSTREAM_READINESS`。当前内网路由的阻塞是上游 readiness，而不是缺少配置；HTTPS 入口仍需独立验证，不能直接沿用内网结果或未经绑定跨地址发送 Key。
+一次有效验收必须记录同一组信息：
 
-已完成的跨平台离线测试和发行包核对见 [README](../README.md#测试状态)。本次诊断修正的相关 53 项离线测试通过，另外已用真实旧记录确认输出正确的内网 `endpoint`。离线测试不证明 CPR 工具调用可用，也不代替 Windows、macOS、Linux 的独立用户环境验收。
+- 最终实际运行的官方 Codex 路径和版本。
+- 目标服务地址、模型和对应的凭据身份；报告不能包含 Key 本身。
+- 真实工具读取临时文件，工具退出码为 0，输出与预设标记完整匹配。
+- 成功回合 `turn.completed`，最终回答匹配，客户端退出码为 0。
 
-## 本次 HTTPS 入口检查
+安装器只有满足自检条件才应报告 `[READY]`。该结果只适用于这次连接和用户环境，不能外推到其他模型、账号、地址或系统，也不保证未来每次调用成功。
 
-- 公开页面可访问，标题为 `Codex Proxy RS`；页面可访问不代表模型请求可用。
-- 未携带 Key 的 `GET /v1/models` 返回 HTTP **401**，错误为 `Missing or invalid API key`。这是预期鉴权拒绝，不证明个人 Key 无效或模型服务故障。
-- 已检查的原隔离环境及维护机当前原生配置指向内网地址；没有发现已绑定目标 HTTPS 字符串的连接。这不等于没有可用 CPR 凭据，也不应阻止继续验收原内网配置。未把内网凭据发往未经验证的 HTTPS 地址。
-- 本次没有在 HTTPS 地址发起官方客户端真实工具自检；尚无该 HTTPS 地址上的 `[READY]` 或已鉴权模型失败证据。下节新增调用使用的是已恢复的原内网配置。
+以下结果都不足以替代验收：网页打开、`/models` 可用、模型出现在菜单、包哈希一致、`codex --version` 成功、CI fixture 输出 READY。`doctor` 的 `LOCAL_OK` 也只表示本地与目录检查通过。
 
-## 内网测试的有效证据范围
+## 自动化测试覆盖什么
 
-- 原测试服务：维护机内网 HTTP API（`http://<内网地址>:18082/v1`，此处脱敏；精确地址见原始 `state.json` 的 `connection.url`）。**不是目标 HTTPS 入口。**
-- 客户端：经官方 npm SHA512 校验的原版 Codex **0.162.1**，Linux x64。
-- 模型：`chatgpt-web/gpt-6-tools-temp`；使用已保存的原生配置。
-- 前置结果：该内网地址此前 `/models` 权限检查通过；本地维护目录有 9 个可见的 V1 模型。这些结果不能外推到 HTTPS 入口。
-- 自检任务：只读取隔离工作目录中的临时文件，要求工具输出与最终回答逐字匹配。
+当前工作流定义在 [test.yml](../.github/workflows/test.yml)，执行结果以对应提交的 [GitHub Actions](https://github.com/Molaison/codex-101/actions) 为准。不要把旧提交的测试数量或绿灯当成本次发布的结果。
 
-| 香港时间 | 时长 | 原生终态 | 完成的工具项 / 成功回合 |
-| --- | --- | --- | --- |
-| 2026-10-21 20:04:43–20:18:32 | 829 秒 | `terminal`，退出码 1 | 0 / 0 |
-| 2026-10-21 21:06:51–21:20:42 | 830 秒 | `terminal`，退出码 1 | 0 / 0 |
-| 2026-10-22 00:57:09–01:11:52 | 883 秒 | `terminal`，退出码 1 | 0 / 0 |
+| 层次 | 检查内容 | 不能证明什么 |
+| --- | --- | --- |
+| Python 测试 | 配置与模型目录、客户端缓存、SQLite 保留、事务恢复、回滚和启动器合约；其中包含替身与隔离环境。 | 不能证明真实 Key、CPR 或 Web 桥接可用。 |
+| 平台安装器检查 | Unix Bash 语法；Windows PowerShell 语法与隔离 bootstrap 集成。 | 隔离 bootstrap 不等于真实账号的 Windows 安装验收。 |
+| 发布完整性 | `release_manifest.json` 与源码载荷 SHA256 一致。 | 清单不是独立密码学签名，不能单独证明发布者身份。 |
+| 官方客户端 smoke | 三个平台下载 npm stable 包、核对 SHA512 并执行版本检查。 | 不连接 CPR，不验证工具回合或个人凭据。 |
 
-三次记录均被安装器归类为 `UPSTREAM_READINESS`，均没有 `final.txt`。每份事件流中都观察到 14 条包含下述错误的事件；**这是事件条数，不代表 14 次独立请求或 14 个账号**：
+本地复核命令（仓库根目录）：
+
+```bash
+python 01_build_release_manifest.py --check
+python -m unittest -q test_lab_install test_onboarding test_profiles test_install_lifecycle
+bash -n install.sh
+```
+
+Windows CI 使用 `python -X utf8 -m unittest -q test_lab_install test_install_lifecycle`，另运行 `test_windows_bootstrap.ps1`；不能将 Unix 专属测试的跳过记成 Windows 实机验收通过。
+
+[release.yml](../.github/workflows/release.yml) 由维护者手动触发，等待上述跨平台测试和官方客户端 smoke 成功后发布 **prerelease**。它不自动推广 stable，也没有用真实 CPR Key 验收三平台。
+
+## 历史记录：内网 HTTP 与目标 HTTPS 不可混用
+
+以下是仓库已记录的 **2026-10-21 至 2026-10-22 历史结果**，不是 v0.2.0 的新验收。时间为香港时间。
+
+### 内网 HTTP
+
+历史自检使用维护机内网 `http://<内网地址>:18082/v1`、Linux x64、经 npm SHA512 校验的官方 Codex **0.162.1**。精确地址与凭据不公开。
+
+| 时间 / 模型 | 已记录结果 | 证据范围 |
+| --- | --- | --- |
+| 10 月 21 日 20:04、21:06；10 月 22 日 00:57，`chatgpt-web/gpt-6-tools-temp` | 三次均终止、退出码 1，无成功工具项和成功回合，分类 `UPSTREAM_READINESS`。 | 只说明该内网路由当时的 temp 调用失败。 |
+| 10 月 22 日，`chatgpt-web/gpt-6-tools-persist` | 在明确接受 Web 历史保存后，修正自检 sandbox 配置覆盖，完成一次工具读取、内容匹配和成功回合，退出码 0、READY。 | 只覆盖该内网持久模型；未开启 Memory，未重启或取消其他活跃任务。 |
+
+temp 失败事件包含：
 
 ```text
 ChatGPT personalization preflight exceeded its readiness deadline
 ```
 
-该证据定位到**内网请求**报告的 readiness 阶段，尚不足以判断是账号、浏览器会话、桥接组件还是其他内部故障，也不足以证明另一地址有同一故障。第三次调用沿用原配置、原模型和原版官方客户端，只发起一次；结束后已确认 worker/client 均不再运行，没有连续重投，也没有重启共享服务。
+这将已记录的失败定位到上游 readiness 阶段，但不能据此断定具体账号、浏览器会话或桥接组件是哪一环有错。每次日志中的重复错误事件也不等于相同次数的独立模型请求。
 
-## 维护机上的原始证据
+原始诊断曾保存在维护机临时目录，可能随清理丢失；不能承诺原始日志永久可读。需要复核时，通过原安装环境的 `checks/current.json` 找到该回合的 `state.json` 和 `events.jsonl`，不要上传整个目录。
 
-私有目录仅供原维护者检查，不应整体上传或转发：
+### 目标 HTTPS
 
-```text
-/tmp/codex101-official-live-probe/provider-connect/checks/attempt-eujkzjrc/
-/tmp/codex101-official-live-probe/provider-connect/checks/attempt-xstekuti/
-/tmp/codex101-official-live-probe/provider-connect/checks/attempt-m_xf3n7q/
-```
+安装器固定目标为 `https://cpr.molaisonz.dpdns.org/v1`。历史记录中：
 
-每个目录的 `state.json` 记录生命周期、客户端路径和退出码；`events.jsonl` 保存失败事件。`/tmp` 是易失存储，重启或清理后可能消失；上表是本次已脱敏保留的复核结果，不代表原始日志永久可用。
+- 公开页面可访问。
+- 不带 Key 请求 `/v1/models` 返回 401。这是预期的鉴权拒绝，不是个人 Key 无效或模型服务故障的证据。
+- 没有该 HTTPS 地址上、使用最终官方客户端完成真实工具自检的成功证据。
 
-不发请求、只查询原生判定的命令（在维护机仓库根运行）：
+早期记录曾把内网失败归到 HTTPS；核对 `state.json` 的 `connection.url` 后已更正。**内网成功或失败都不能迁移为 HTTPS 结论，Key 也不能仅因模型名相同就跨地址发送。**
 
-```bash
-python3.11 - <<'PY'
-from pathlib import Path
-import json
-from codex_provider import check_result
+## 继续验收时的最小流程
 
-root = Path('/tmp/codex101-official-live-probe/provider-connect/checks')
-for directory in sorted(root.glob('attempt-*')):
-    print(directory.name, json.dumps(check_result(directory), ensure_ascii=False))
-PY
-```
+1. 核实要测的地址及凭据绑定。优先复用同一地址的现有授权配置；不要把另一服务的 Key 转发过来试。
+2. 查看旧自检是否仍在运行。有未完成回合时恢复原事务；提交状态不明时保留日志并人工核对，不重新投递。
+3. 上游修复且旧回合已终止后，沿用原模型做一次必要的真实只读检查。`--repair` / `-Repair` 表示明确重测，不是服务端修复开关。
+4. 逐项记录客户端版本、地址、模型、工具结果、回合终态和退出码。切换为 persist 必须主动接受 Web 账号保存历史，不能用另一模型成功冒充默认 temp 已修复。
+5. 在目标 HTTPS 和各目标系统的独立用户环境分别验收，再决定是否具备稳定发布条件。
 
-不要提供 Key、私有 Key 文件、整个 `config.toml` 或整个 `CODEX_HOME`。对外反馈可直接使用本页的时间、模型、错误和终态。
-
-## 诊断修正与发行版边界
-
-当前修正源码的自检诊断增加 `endpoint`，标明该次记录的连接地址；待完成、成功、失败和输出不匹配都带此字段。旧记录没有地址时明确返回 `null`，不猜测。安装报告和 `doctor --json` 也标明所检连接；连接变化时同时给出原地址与新地址。不改变真实调用或 `[READY]` 的验收条件。
-
-这项修正**尚未包含在既有 v0.1.0 Release 附件中**。旧版本维护者仍需核对 `state.json` 的 `connection.url` 与原生配置中的 `base_url`，不能只看模型名或错误码。
-
-## 恢复条件与下一步
-
-1. **CPR 服务/账号维护者**：根据第三次调用的时间窗及错误检查该内网路由的 Web personalization readiness。现有配置和凭据已经恢复，不再把用户重新提供配置或 Key 当作排查前置。不得为排查强制重启别人的活跃任务；远程生产变更仍需对应授权。
-2. **仓库维护者**：上游恢复后，沿用现有 `auth.command` 和同地址配置，在原隔离环境仅恢复或发起一次必要的真实只读自检。只有文件读取、内容匹配、成功回合及退出码全部满足，才接受该地址的 `[READY]`；不连续重投、不换模型冒充修复。
-3. **HTTPS 入口维护者**：通过已有部署配置或原生管理机制核实 HTTPS 路由及凭据绑定，再独立验证 HTTPS 入口。当前没有证明两地址属于同一部署的运行时映射，因此不盲目把内网 Key 转发过去，也不以此向用户反复索要相同信息。
-4. **各平台试用者**：分别在 Windows、macOS、Linux 独立用户环境运行 Release 安装器并取得本机 `[READY]`。三平台实机验收完成前，不转为稳定版或宣布全平台可用。
-
-客户端重试字段的定义见 [OpenAI Codex 配置参考](https://developers.openai.com/codex/config-reference/)（2026-10-21 已读取核实）；这些配置不是 CPR 内部故障的诊断依据。
+对外反馈只需脱敏状态、发生时间、版本、模型和经确认可分享的地址。不要提供 Key、私有 Key 文件、完整 `config.toml`、`connection.json` 或整个 `CODEX_HOME`。

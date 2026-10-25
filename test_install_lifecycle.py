@@ -376,6 +376,22 @@ if __name__ == "__main__":
             self.assertFalse((self.root / "pending.json").exists())
             self.assertFalse((lifecycle.root_path() / "active.json").exists())
 
+    def test_maintenance_launcher_keeps_explicit_root(self):
+        self.root = self.home / "custom root's payload $literal"
+        self.root.mkdir()
+        with mock.patch.dict(os.environ, {"CODEX_CONNECT_PYTHON": sys.executable}):
+            self.assertEqual(self.install("v0.2.0"), 0)
+            if os.name == "nt":
+                launcher = Path(os.environ["LOCALAPPDATA"]) / "CodexLab" / "bin" / "codex101.cmd"
+                command = ["cmd", "/d", "/c", str(launcher), "status"]
+            else:
+                launcher = self.home / ".local" / "share" / "codex-lab" / "bin" / "codex101"
+                command = [str(launcher), "status"]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout).get("active"), "v0.2.0")
+            self.assertFalse((lifecycle.root_path() / "active.json").exists())
+
     @unittest.skipIf(os.name == "nt", "Bash bootstrap belongs to the Unix CI matrix")
     def test_bash_explicit_failure_prints_next_steps_with_original_arguments(self):
         source = self.payload("v0.2.0")

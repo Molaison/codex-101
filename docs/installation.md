@@ -1,111 +1,97 @@
-# 实验室 Codex（codex-101）：Windows / macOS / Linux 使用教程
+# 安装、配置与模型选择
 
-> **安装原则**：同学只需安全输入自己的 Key。入口自动选择最新稳定发布 tag；尚无稳定版时选最新预发布，载荷不混用版本。每台电脑都必须通过安装器自己的真实工具调用 `[READY]` 才算配置成功。实机验收范围以项目 [README](../README.md#测试状态) 为准。
+本文面向 **codex-101 v0.2.0 preview 候选的 `--lab` 预设**。先按 [README 的安装命令](../README.md#安装并开始使用) 操作；本文解释前置条件、默认行为、模型选择和常见故障。
 
-## 1. 同学只需做一次
+## 1. 安装前准备
 
-1. 在**任何能访问 CPR HTTPS 服务**的 Windows、macOS 或 Linux 电脑／服务器上都能安装，**不需要 SSH 登录 ywl**；无需预装 Node.js、npm 或 Codex。
-2. 向 @曾正鹏 申请 **个人 CPR Key**。每人一个，按个人限额使用，不要分享到群聊、文件或 Git。
-3. 在需要使用 Codex 的那台电脑的终端粘贴对应平台的**一条命令**。首次只会让你安全输入个人 Key，不需要输入 API 地址、模型名或修改配置文件。
+- 在实际使用 Codex 的电脑上运行，不需要登录维护机。
+- 准备个人 CPR Key，只在终端隐藏提示中输入。不要使用别人的 Key，也不要分享到聊天、命令参数或 Git。
+- macOS / Linux 需要 `curl` 与 Python 3.8+。Windows 需要 64 位系统，安装器会在用户目录准备并校验 Python，不要求管理员权限。
+- 首次安装需要访问 GitHub 发布附件、npm 官方包，以及 `https://cpr.molaisonz.dpdns.org/v1`。Windows 准备 Python 时还需要访问 python.org。
+- 先保存当前工作。安装器不会强杀活跃 Codex 任务；需要刷新配置时，只在空闲条件满足后重启本地 server，否则返回待处理状态。
 
-   **macOS / Linux：**
+输入 Key 后，安装器先核对模型访问权限，再用最终官方客户端读取一个临时文件并匹配返回内容。实验室自检前台最多等待 20 分钟；超时可能只是仍在运行，不能当成失败后重新投递。
 
-   ```bash
-   (set -o pipefail; curl --http1.1 -fsSL --retry 2 \
-     https://raw.githubusercontent.com/Molaison/codex-101/main/install.sh \
-     | bash -s -- --lab)
-   ```
+**完成标准是 `[READY]` 加成功退出。** 打开新终端、进入项目目录后运行 `codex`。若命中了已有定制版，使用 README 列出的实验室独立入口。
 
-   **Windows PowerShell：**
+## 2. 安装器会改什么
 
-   ```powershell
-   & ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/Molaison/codex-101/main/install.ps1').Content)) -Lab
-   ```
-
-4. 看到 **`[READY]` 且安装成功退出**后，打开**新终端**，进入自己的项目目录执行 `codex`。如果机器上已有同名定制版客户端占用 PATH，按安装器输出的路径运行实验室官方版；不要删除旧客户端。安装器若显示其他状态，不表示已通过真实模型测试。
-
-如果已有 Key 和配置，重复运行同一命令会尝试安全复用；无需再次输入。换 Key 时联系维护者按安装器的 `--reconfigure` 机制处理，**不要把 Key 粘贴进聊天或命令行参数**。
-
-**日常使用直接执行 `codex`，不需要再运行安装器。** 首次安装的官方二进制存入当前用户 `CODEX_HOME/provider-connect/official/`，同一版本完好时直接复用；同一发布 tag 的助手与模型目录也会缓存。只有首次安装、升级版本、缓存损坏或切换用户/`CODEX_HOME` 时才可能重新下载大包；安装器每次仅查询一下最新发布 tag。
-
-## 2. 安装器为每个人自动完成什么
-
-| 事项 | 自动行为 |
+| 项目 | v0.2.0 行为 |
 | --- | --- |
-| Codex 客户端 | 使用官方 npm 发布的 **Codex 0.162.1** 平台包，下载时校验 npm SHA512，不执行你个人曾修改的 `codex`；原二进制不覆盖。|
-| 启动命令 | macOS/Linux 在 `$HOME/.local/share/codex-lab/bin/codex` 放独立官方入口；Windows 在 `%LOCALAPPDATA%\CodexLab\bin\codex.cmd` 放独立入口，添加用户 PATH；原二进制不覆盖。|
-| API 服务 | 固定 `https://cpr.molaisonz.dpdns.org/v1`；不复用不同地址的 Key。|
-| Key | 单独存入当前用户私有目录（目录 `0700`、文件 `0600`），通过 `auth.command` 读取。|
-| SQLite | Linux 使用 `/tmp/<用户名>/codex-sqlite`；macOS/Windows 使用系统临时目录下 `<用户名>/codex-lab/codex-sqlite`；避免在共享 HOME 中频繁写入。旧库确认停写后迁移主库与 WAL/SHM，**旧文件保留**。|
-| 模型 | 默认 `chatgpt-web/gpt-6-tools-temp`，只显示目录中显式支持 **V1 协作协议**的条目。|
-| 权限 | 按实验室要求，默认 `sandbox_mode="danger-full-access"`、`approval_policy="never"`，不弹执行授权。|
-| 连接稳定性 | CPR 禁用 Responses WebSocket，使用 SSE；**HTTP 自动重试 8 次、SSE 自动重试 12 次、SSE 空闲超时 15 分钟**；真实工具自检前台最多等待 20 分钟，未结束的回合可查询恢复。|
-| 验收 | 先核对 Key 的 `/models` 权限，再由**最终官方客户端**读一个临时文件并核对工具结果；只有通过才报 READY。|
+| 官方客户端 | 首次选择 npm `@openai/codex/latest` 的稳定版本，校验平台包 SHA512，再校验可执行版本；不修改二进制，不覆盖原有系统/npm 客户端。 |
+| 后续运行 | 复用完好的官方副本和同 tag 安装组件；重跑入口仍会检查本仓库 Release。主动升级使用维护命令，不靠日常启动。 |
+| 配置 | 通过官方配置接口更新实验室所需字段，保留其他配置。全权限、默认模型、服务地址及 SQLite 目录等实验室字段会改变。 |
+| 启动入口 | 新建实验室独立入口，更新用户 PATH / shell 启动配置；不会删除原客户端。 |
+| 凭据 | 保存于当前用户的本地配置状态目录，原生配置通过 `auth.command` 读取凭据。不要分享整个 `CODEX_HOME`、`connection.json` 或 Key 文件。 |
+| 模型目录 | 使用发行包内的 V1 目录，当前含 9 个可见模型和 2 个隐藏条目；不把 V2 元数据改写成 V1。 |
+| 网络 | Responses 使用 SSE，禁用 WebSocket；HTTP 最多重试 8 次、流最多重试 12 次，SSE 无事件超时为 15 分钟。 |
+| 数据库 | 尝试使用本机私有临时目录；存在冲突或写入风险时继续使用原库，不合并、不删除另一份。 |
+| 已有数据 | 保留 `CODEX_HOME`、本地 sessions 和旧官方客户端副本。软件回滚不等于数据库或会话备份。 |
 
-**重要：**全权限意味着 Codex 可以修改你有权限访问的任何文件，包括共享目录，请只在明确的项目目录运行。系统临时目录会在重启或清理后丢失；项目代码与实验数据不得存放其中。原来的 `CODEX_HOME`、sessions 和项目文件不会随 SQLite 迁移删除。
+**全权限风险：** `sandbox_mode="danger-full-access"`、`approval_policy="never"` 允许 Codex 操作当前用户能访问的文件，不会逐项请求批准。共享目录和项目以外的文件也在风险范围内；运行前检查工作目录并备份重要数据。
 
-**v0.2.0 安全迁移：**如果旧 Codex 进程仍可能写库，或目标目录已有另一份数据，安装器将跳过复制、**继续使用原本配置（或 Codex 默认）的 SQLite 目录**，打印 `[SQLITE_PRESERVED]`、源/目标路径及切换命令。两套文件和 WAL/SHM 均保留；不会强杀 Codex、混库或自动决定哪份历史更值得保留。避免了旧版 v0.1.1 的永久硬中断。
+**凭据风险：**隐藏输入和文件访问权限不是加密保险箱。不要把状态目录加入 Git、共享网盘或故障附件；仅分享检查过的脱敏诊断。更换 Key 时重跑安装命令，Bash 增加 `--reconfigure`，PowerShell 增加 `-Reconfigure`。
 
-如需切换到指定目录，在上述 macOS/Linux 原安装命令的 `--lab` 后添加 `--sqlite-home '/绝对路径'`，Windows 安装命令添加 `-SqliteHome 'C:\\实际目录'`。这**只指定要使用的目录**，不会复制/合并 SQLite；环境变量 `CODEX_SQLITE_HOME` 也可以显式指定，现在优先于 `config.toml` 中旧的 `sqlite_home`。必须确认目录确实包含希望保留的历史。临时目录可能被系统清理，重要数据请定期备份。
+### SQLite 的默认位置
 
-## 3. 模型怎么选？先看这张表
+- Linux：`/tmp/<用户名>/codex-sqlite`
+- macOS / Windows：系统临时目录下的 `<用户名>/codex-lab/codex-sqlite`
 
-**绝大多数同学保持默认：`GPT-6 (Web) · Tools · Temporary`。** 在 Codex 内用 `/model` 切换。菜单的显示名称只是标签，脚本/API 中必须使用右侧的准确模型 ID。
+这些位置可能被系统清理，不能成为重要历史的唯一备份。只有源目录存在 `state_5.sqlite` 时才进入迁移检查；检测到 Codex 进程、非空目标或复制期间文件变化时，打印 `[SQLITE_PRESERVED]` 并沿用源库。显式选库和具体保留边界见 [SQLite 恢复说明](03_upgrade_rollback.md#sqlite-冲突先保留再选择)。
 
-| 模型 ID | 中文解释及用途 |
+## 3. 选择模型
+
+在 Codex 中输入 `/model`。显示名只是标签，脚本/API 中使用准确的模型 ID。以下描述是维护目录中的用途和路由语义，**不表示当前 Key 已开通，或该路由已通过真实工具测试**。
+
+| 模型 ID | 用途 |
 | --- | --- |
-| **`chatgpt-web/gpt-6-tools-temp`** | **默认推荐**；GPT-6、能调用 Codex 工具、Web 临时会话。适合改代码、阅读文件、写分析脚本。 |
-| `chatgpt-web/gpt-6-tools-persist` | 同为 GPT-6 Tools，但会保存 **Web 账号聊天历史**；适合需要以后回查的工具会话。|
-| `chatgpt-web/gpt-6-chat-temp` | GPT-6 的 **Chat** 模式、Web 临时会话；更偏普通问答、概念解释与讨论，不是完整的 Codex 工具工作流。|
-| `chatgpt-web/gpt-6-chat-persist` | GPT-6 Chat + Web 保存历史；适合以后继续文字讨论，不是首选工具代理。|
-| `chatgpt-web/gpt-5.6-tools-temp` | GPT-5.6 的工具模式，Web 临时会话；GPT-6 路由出现兼容问题时可作为明确可测的备选。|
-| `chatgpt-web/gpt-5.6-tools-persist` | GPT-5.6 Tools + Web 保存历史；需要历史行为时使用。|
-| `chatgpt-web/gpt-5.6-chat-temp` | GPT-5.6 Chat + Web 临时会话；文字问答。|
-| `chatgpt-web/gpt-5.6-chat-persist` | GPT-5.6 Chat + Web 保存历史；文字问答。|
-| `gpt-5.6-luna` | 旧版轻量/快速模型；简单解释或小任务可尝试，能力以实际验证为准。|
+| `chatgpt-web/gpt-6-tools-temp` | 默认；GPT-6 工具模式、Web 临时会话，面向文件与编程任务。 |
+| `chatgpt-web/gpt-6-tools-persist` | GPT-6 工具模式，保存 Web 账号聊天历史。 |
+| `chatgpt-web/gpt-6-chat-temp` | GPT-6 一般问答、Web 临时会话，不作为完整 Codex 工具工作流的替代。 |
+| `chatgpt-web/gpt-6-chat-persist` | GPT-6 一般问答，保存 Web 账号聊天历史。 |
+| `chatgpt-web/gpt-5.6-tools-temp` | GPT-5.6 工具模式、Web 临时会话。 |
+| `chatgpt-web/gpt-5.6-tools-persist` | GPT-5.6 工具模式，保存 Web 账号聊天历史。 |
+| `chatgpt-web/gpt-5.6-chat-temp` | GPT-5.6 一般问答、Web 临时会话。 |
+| `chatgpt-web/gpt-5.6-chat-persist` | GPT-5.6 一般问答，保存 Web 账号聊天历史。 |
+| `gpt-5.6-luna` | 目录中的轻量模型；能力以实际调用为准。 |
 
-**`Tools` vs `Chat`：** `Tools` 是完整的 **Codex 工具模式**，能读写文件、执行命令，但上下文更偏代码、项目与自动操作；`Chat` 更偏一般性问答、文献思路、概念解释，不应指望它像 Tools 一样完成文件修改。要实际改代码就选 `Tools`；只是问问题可选 `Chat`。
+### Tools / Chat
 
-**`Temporary`（`temp`）vs `Persist`：** `Temporary` 不将 Web 会话保存进 ChatGPT **账号聊天历史**，留痕更少，适合临时或偏隐私的讨论；代价是隔一段时间后可能找不回同一个 Web 会话，**不要把它当成长期可恢复的工作记录**。`Persist` 保存 Web 账号侧的会话历史，更适合需要回查、持续讨论的任务。`Temporary` **不等于服务端零留存或绝对隐私**；两种模式与 Codex **本地 sessions** 的保存是两回事。长任务请把关键进展和结果写回项目文件。
+`Tools` 面向读写文件、执行命令和编程。`Chat` 面向文字问答与讨论。要完成代码修改，优先使用工具模式；不能仅凭模型出现在菜单中就认定它支持所需工具。
 
-`high`、`xhigh`、`max` 是推理深度，**不是三个独立模型**；Web 条目的目录支持这些档位，默认使用 `high`。更深的档位可能更慢或占用更多额度。
+### Temporary / Persist
 
-## 4. 原本支持的 GPT 模型去哪了？
+- `temp`：Web 会话不保存进账号聊天历史，不适合依赖该历史恢复长期任务。
+- `persist`：Web 账号保留聊天历史，方便回查，也意味着更多账号侧留痕。
 
-截至 2026-10-21，上游维护目录也列出了下列 **原生 GPT 模型**（并非 `chatgpt-web/` 路由），可帮助理解命名和代际定位。它们在上游目录中标记支持 API，但**当前 V1-only 实验室预设不能选择**：这些条目标记为 V2 协作协议，或未声明 V1。请不要把“上游列出”当成当前 Key 已开通或本地能调用。
+`temp` **不等于服务端零留存或绝对隐私**。两种模式与 Codex 本地 sessions 分开；重要结论应写回项目文件。安装器不会为解决 readiness 问题自动从 `temp` 切到 `persist`，也不会自动开启 Memory。
 
-| 上游原生 GPT 模型 | 主要定位（来自维护目录） | 当前实验室安装 |
-| --- | --- | --- |
-| `gpt-6.1-sol` | 最新一代日常编程、通用任务主力 | V2；不可选 |
-| `gpt-6-astra` | 复杂度高、需要更强推理的任务 | V2；不可选 |
-| `gpt-6-sol` | 上一代通用任务主力 | V2；不可选 |
-| `gpt-6-luna` | 上一代快速、轻量的简单任务模型 | V2；不可选 |
-| `gpt-5.6-sol` | 更早一代通用任务主力 | V2；不可选 |
-| `gpt-5.6-terra` | 更早一代平衡型模型 | V2；不可选 |
-| `gpt-5.5` | 旧版编程模型 | 未声明 V1；不可选 |
+若明确接受保存 Web 账号聊天历史，可在 README 安装命令中追加：
 
-**可实际选择的仍是第 3 节的 9 个模型。** 当前发行包的 `model_catalog.json` 共保留上游目录中 **11 个显式 V1 条目**，其中 9 个正常可见、2 个内部隐藏。安装器不会把 V2 模型的元数据伪改为 V1。**目录中看到 ≠ Key 有权限 ≠ 能成功完成工具调用**，应以当前 `/models` 权限及官方客户端真实工具调用为准。
+- Bash：`--model chatgpt-web/gpt-6-tools-persist`
+- PowerShell：`-Model 'chatgpt-web/gpt-6-tools-persist'`
 
-验收结果还必须对应**同一地址、模型和凭据**：内网 HTTP API 的测试不能代表本教程固定的 HTTPS 入口。维护者应核对自检 `state.json` 的 `connection.url` 与原生配置的 `base_url`；不能仅凭模型名或错误码沿用旧结果。地址范围更正见 [真实验收记录](01_cpr_acceptance.md)。
+这只是主动选择另一条路由，不保证消除故障；切换后仍须使用当前地址和 Key 完成真实工具验收。
 
-## 5. `Reconnecting...` 或失败时怎么办？
+### 推理档位与不可见模型
 
-过去有 CPR WebSocket 提前断流的现象；旧版安装器还将 `request_max_retries` 和 `stream_max_retries` 都设为 **0**。新预设改走 SSE，设置 **HTTP 8 次、SSE 12 次自动重试**，把 SSE 无事件空闲超时从默认 **5 分钟提高到 15 分钟**。这些是客户端缓解措施，不保证修复服务端故障；重试次数多也意味着严重故障时最终失败可能更晚。相关字段见 [OpenAI Codex 配置参考](https://developers.openai.com/codex/config-reference/)。
+`high`、`xhigh`、`max` 是推理档位，不是独立模型。Web 条目的目录包含这三档；实验室安装配置默认设为 `high`。更深档位的耗时和额度取决于服务端，不在这里承诺性能。
 
-先区分是 **终端/网络断线**、**Codex 与 CPR 的响应流断线**，还是 **Key 额度、服务端模型超时或 Web 桥接问题**。不要反复安装、反复提交同一请求，尤其是写文件、外部操作和长任务；先查原任务是否结束，再决定是否重试。
+原生 `gpt-6.1-sol`、`gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.5` 等名称不在当前实验室的可见 V1 菜单中。上游目录列出、Key 的 `/models` 返回、以及客户端工具调用成功，是三个不同层次。可选项以当前发行包的 [model_catalog.json](../model_catalog.json) 和实际权限为准。
 
-| 安装/自检状态 | 该做什么 |
+## 4. 常见故障
+
+先保留终端状态和发生时间，查看 `[NEXT]`，再查 [升级与恢复手册](03_upgrade_rollback.md)。不要因为 `Reconnecting...` 或前台超时就重复提交同一任务，尤其是会写文件或执行外部操作的任务。
+
+| 状态 | 下一步 |
 | --- | --- |
-| `AUTH` / `ACCESS` | 分别核对个人 Key / 联系管理员检查该 Key 的模型权限。|
-| `NETWORK` / `ENDPOINT` | 检查当前电脑出口、代理、DNS、证书；不要关闭 TLS 校验。|
-| `CHECK_PENDING` / `SERVER_BUSY` | 等旧任务或旧自检完成；**重跑同一入口查询状态**，不要额外提交相同请求。|
-| `SERVER_RESTART_REQUIRED` | 让旧任务结束，重跑安装；只允许空闲重启。|
-| `UPSTREAM_COMPAT` | 让维护者修 CPR/ChatGPT Web 桥接兼容；重装官方 CLI 无法修服务端协议。|
-| `UPSTREAM_READINESS` | CPR Web personalization preflight 一直超时；联系维护者检查桥接和账号 readiness。继续重复安装无效。|
-| `OUTPUT_MISMATCH` / 未 READY | 联系管理员，提供**脱敏**状态和时间；不要提供 Key 或整个 `~/.codex`。|
+| `AUTH` / `ACCESS` | 分别检查 Key / 请管理员核对模型权限。不要发送 Key 本身作为故障证据。 |
+| `NETWORK` / `ENDPOINT` | 检查当前网络、代理、DNS 和证书；不要关闭 TLS 校验。 |
+| `CHECK_PENDING` / `PENDING` | 原自检可能仍在运行，按提示恢复原事务，不新建相同回合。 |
+| `SERVER_BUSY` / `PENDING_RESTART` / `SERVER_RESTART_REQUIRED` | 等已有任务结束，再按提示恢复；不要强杀共享任务。 |
+| `UPSTREAM_COMPAT` | 请维护者检查 CPR / Web 桥接兼容，重装 CLI 不会修复服务端协议。 |
+| `UPSTREAM_READINESS` | 已报告上游 readiness 故障；同模型会复用保存的失败记录，避免盲目重投。上游修复后再加 `--repair` / `-Repair` 明确重测。 |
+| `RECOVERY_REQUIRED` | 无法安全自动判断或恢复。保留事务和自检记录，交给维护者核查，不删除记录或强制重测。 |
+| `OUTPUT_MISMATCH` / 其他未 READY | 提供脱敏状态、时间、客户端版本、模型和目标地址；不要上传整个配置目录。 |
 
-维护者检查优先级：分别记录断线发生时的 Codex 版本、CPR 状态、HTTP/SSE 事件是否完成、代理闲置超时、429/502/503/504 情况；区分终态失败与仍在进行的请求。客户端配置只能缓解短暂断流，不能把服务端失败伪装成成功。
-
-**如果是 `UPSTREAM_READINESS`：** `/models` Key/模型预检成功不代表真实工具能启动。已知同一模型的失败会直接显示保存的终态，不会再次下载或盲目提交；上游问题处理后再加 `--repair`（PowerShell `-Repair`）明确重测。如果接受 **ChatGPT Web 账号保存历史**的隐私差异，可以主动用持久模式再验收：macOS/Linux 在安装命令的 `--lab` 后加 `--model chatgpt-web/gpt-6-tools-persist`；Windows 在 `-Lab` 后加 `-Model 'chatgpt-web/gpt-6-tools-persist'`。不自动切换、不启用 Memory；已有成功证据仅覆盖维护者的内网持久模式，HTTPS 和成员设备仍须独立真实验收。
-
-安装源代码、版本发行与反馈：[codex-101](https://github.com/Molaison/codex-101)。
+SSE 和重试设置只能缓解部分短暂断流，不能保证修复服务端故障；重试增加也可能延长最终报错时间。`/models` 可用只说明权限预检通过。真实验收标准及历史地址范围见 [CPR 验收说明](01_cpr_acceptance.md)。

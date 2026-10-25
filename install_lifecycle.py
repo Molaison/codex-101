@@ -361,10 +361,10 @@ def ensure_maintenance_launcher(root):
     if os.name == "nt":
         destination = Path(os.environ["LOCALAPPDATA"]) / "CodexLab" / "bin" / "codex101.cmd"
         python = Path(os.environ.get("CODEX_CONNECT_PYTHON", str(root / "python" / "python.exe")))
-        content = '@rem codex-101 managed maintenance launcher\n@"%s" -X utf8 "%s" %%*\n' % (str(python).replace("%", "%%"), str(root / "install_lifecycle.py").replace("%", "%%"))
+        content = '@rem codex-101 managed maintenance launcher\n@"%s" -X utf8 "%s" --root "%s" %%*\n' % (str(python).replace("%", "%%"), str(root / "install_lifecycle.py").replace("%", "%%"), str(root).replace("%", "%%"))
     else:
         destination = Path.home() / ".local" / "share" / "codex-lab" / "bin" / "codex101"
-        content = '#!/bin/sh\n# codex-101 managed maintenance launcher\nexec python3 "%s" "$@"\n' % str(root / "install_lifecycle.py")
+        content = '#!/bin/sh\n# codex-101 managed maintenance launcher\nexec python3 %s --root %s "$@"\n' % (shlex.quote(str(root / "install_lifecycle.py")), shlex.quote(str(root)))
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists() and "codex-101 managed maintenance launcher" not in destination.read_text(encoding="utf-8"):
         print("[WARNING] codex101 命令名已被其他程序占用；请使用安装目录内 install_lifecycle.py 维护。", file=sys.stderr)
