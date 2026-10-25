@@ -129,10 +129,10 @@ class LabInstallTests(unittest.TestCase):
         (source / "state_5.sqlite").write_bytes(b"existing-history")
         (target / "state_5.sqlite").write_bytes(b"different-history")
         output = io.StringIO()
-        with mock.patch.object(c.sys, "platform", "darwin"), \\
-                mock.patch.object(c.tempfile, "gettempdir", return_value=str(self.root / "system-tmp")), \\
-                mock.patch.object(c, "provider_settings", return_value={"sqlite_home": str(source)}), \\
-                mock.patch.dict(os.environ, {"CODEX_SQLITE_HOME": ""}), \\
+        with mock.patch.object(c.sys, "platform", "darwin"), \
+                mock.patch.object(c.tempfile, "gettempdir", return_value=str(self.root / "system-tmp")), \
+                mock.patch.object(c, "provider_settings", return_value={"sqlite_home": str(source)}), \
+                mock.patch.dict(os.environ, {"CODEX_SQLITE_HOME": ""}), \
                 contextlib.redirect_stderr(output):
             chosen = c.lab_sqlite_home()
             self.assertEqual(os.environ["CODEX_SQLITE_HOME"], str(source))
@@ -150,8 +150,8 @@ class LabInstallTests(unittest.TestCase):
         target.mkdir()
         (source / "state_5.sqlite").write_bytes(b"old")
         (target / "state_5.sqlite").write_bytes(b"new")
-        with mock.patch.object(c, "provider_settings", return_value={"sqlite_home": str(source)}), \\
-                mock.patch.object(c, "migrate_sqlite_when_idle", side_effect=AssertionError("unwanted copy")), \\
+        with mock.patch.object(c, "provider_settings", return_value={"sqlite_home": str(source)}), \
+                mock.patch.object(c, "migrate_sqlite_when_idle", side_effect=AssertionError("unwanted copy")), \
                 mock.patch.dict(os.environ, {"CODEX_SQLITE_HOME": str(target)}):
             self.assertEqual(c.lab_sqlite_home(), str(target))
             self.assertEqual(c.lab_sqlite_home(str(source)), str(source))
@@ -165,11 +165,11 @@ class LabInstallTests(unittest.TestCase):
         source = self.root / "existing"
         source.mkdir()
         (source / "state_5.sqlite").write_bytes(b"live")
-        with mock.patch.object(c.sys, "platform", "darwin"), \\
-                mock.patch.object(c.tempfile, "gettempdir", return_value=str(self.root / "tmp")), \\
-                mock.patch.object(c, "provider_settings", return_value={"sqlite_home": str(source)}), \\
-                mock.patch.dict(os.environ, {"CODEX_SQLITE_HOME": ""}), \\
-                mock.patch.object(c.subprocess, "run", return_value=mock.Mock(stdout="codex\\n")), \\
+        with mock.patch.object(c.sys, "platform", "darwin"), \
+                mock.patch.object(c.tempfile, "gettempdir", return_value=str(self.root / "tmp")), \
+                mock.patch.object(c, "provider_settings", return_value={"sqlite_home": str(source)}), \
+                mock.patch.dict(os.environ, {"CODEX_SQLITE_HOME": ""}), \
+                mock.patch.object(c.subprocess, "run", return_value=mock.Mock(stdout="codex\n")), \
                 contextlib.redirect_stderr(io.StringIO()) as output:
             chosen = c.lab_sqlite_home()
         self.assertEqual(chosen, str(source))
