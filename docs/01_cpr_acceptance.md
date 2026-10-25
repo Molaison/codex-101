@@ -1,6 +1,6 @@
 # CPR 验收标准与历史证据
 
-**codex-101 v0.2.0 候选保持 preview 定位。现有记录不能证明默认 temp 模型、目标 HTTPS CPR 或 Windows / macOS / Linux 三平台用户环境均已通过真实验收。**
+**codex-101 v0.2.0 已以 preview 发布。现有记录不能证明默认 temp 模型、目标 HTTPS CPR 或 Windows / macOS / Linux 三平台用户环境均已通过真实验收。**
 
 本文区分自动化测试、官方客户端启动检查和真实服务验收，避免用一种证据替代另一种。操作入口见 [README](../README.md)，中断处理见 [恢复手册](03_upgrade_rollback.md)。
 

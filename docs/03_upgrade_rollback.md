@@ -1,6 +1,6 @@
 # 升级、回滚与中断恢复
 
-适用于 **codex-101 v0.2.0 preview 候选**，发布状态见 [README](../README.md)。v0.1.x 没有完整的版本事务管理器，先用 [README 安装命令](../README.md#安装并开始使用) 更新；公开附件以 [Releases](https://github.com/Molaison/codex-101/releases) 为准。
+适用于 **codex-101 v0.2.0 preview**，发布状态见 [README](../README.md)。v0.1.x 没有完整的版本事务管理器，先用 [README 安装命令](../README.md#安装并开始使用) 更新；公开附件以 [Releases](https://github.com/Molaison/codex-101/releases) 为准。
 
 ## 先区分两个版本
 

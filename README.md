@@ -2,7 +2,7 @@
 
 在自己的 Windows、macOS 或 Linux 电脑上，用个人 CPR Key 配置未经修改的官方 Codex。无需 SSH 到维护机，也无需安装 Node.js/npm 或手写配置。
 
-> **v0.2.0 preview**：发布状态以 [Releases](https://github.com/Molaison/codex-101/releases) 为准。一键安装只使用已公开 Release（附件齐全、稳定版优先，否则取最新预发布），所以 `main` 比 Release 新时，安装器仍会选上一个已发布版本，并在终端打印选中的 tag 与原因。
+> **[v0.2.0 preview 已发布](https://github.com/Molaison/codex-101/releases/tag/v0.2.0)**（2026-10-25）。它仍是预发布；发布和 CI 通过不等于目标 HTTPS CPR 或个人设备已通过真实工具验收。一键安装只使用已公开 Release（附件齐全、稳定版优先，否则取最新预发布），所以 `main` 比 Release 新时，安装器仍会选上一个已发布版本，并在终端打印选中的 tag 与原因。
 
 ## 安装并开始使用
 
