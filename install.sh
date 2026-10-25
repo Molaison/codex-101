@@ -13,9 +13,9 @@ install_failure() {
         printf '\n[NOT_READY] 安装未完成（退出码 %s）；旧数据未被安装器清理。\n' "$status" >&2
     fi
     if [[ -f "$root/install_lifecycle.py" ]]; then
-        printf '[NEXT] 查看安装状态（本地只读）：python3 %q status\n' "$root/install_lifecycle.py" >&2
+        printf '[NEXT] 查看安装状态（本地只读）：python3 %q --root %q status\n' "$root/install_lifecycle.py" "$root" >&2
         if [[ -f "$root/pending.json" ]]; then
-            printf '[NEXT] 恢复同一事务（不盲目重投）：python3 %q recover\n' "$root/install_lifecycle.py" >&2
+            printf '[NEXT] 恢复同一事务（不盲目重投）：python3 %q --root %q recover\n' "$root/install_lifecycle.py" "$root" >&2
         fi
     fi
     printf '[NEXT] 排除上述错误原因后，可重新执行完整安装命令：\n  (set -o pipefail; curl --http1.1 -fsSL --retry 2 https://raw.githubusercontent.com/Molaison/codex-101/main/install.sh | bash -s --' >&2
@@ -24,8 +24,6 @@ install_failure() {
 }
 
 main() {
-    local -a original_args=("$@")
-    trap 'install_failure "$?" "${original_args[@]}"' ERR
     local release="${CODEX_CONNECT_REF:-}"
     local base
     local root="${CODEX_HOME:-${HOME}/.codex}/provider-connect"
@@ -72,7 +70,7 @@ main() {
     base="${CODEX_CONNECT_BASE:-$base}"
     mkdir -p "$root"
     chmod 700 "$root"
-    # New releases have a signed-by-release manifest and a recoverable Python
+    # New releases have a release-pinned hash manifest and a recoverable Python
     # lifecycle engine. Keep v0.1.x's existing installer contract for migration.
     if [[ "$release" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] &&
        (( 10#${BASH_REMATCH[1]} > 0 || 10#${BASH_REMATCH[2]} >= 2 )); then
@@ -162,4 +160,7 @@ main() {
     printf '已有 server 有任务时不重启；需要更新时，空闲并确认后才调用官方重启命令。\n'
 }
 
+# Keep arguments and the trap alive after an explicit failure return from main.
+original_args=("$@")
+trap 'install_failure "$?" "${original_args[@]}"' ERR
 main "$@"

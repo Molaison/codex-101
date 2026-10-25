@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -348,6 +349,67 @@ if __name__ == "__main__":
         with mock.patch.object(lifecycle, "codex_busy", return_value=True):
             self.assertEqual(lifecycle.rollback(self.root), 2)
         self.assertEqual(lifecycle.read_json(self.root / "active.json")["active"], "v0.2.1")
+
+    def run_recovery_command(self, root, action):
+        command = lifecycle.recovery_command(root, action)
+        if os.name == "nt":
+            return subprocess.run(["powershell", "-NoProfile", "-Command", command],
+                                  capture_output=True, text=True, encoding="utf-8", timeout=20)
+        return subprocess.run(shlex.split(command), capture_output=True, text=True, timeout=20)
+
+    def test_generated_recovery_commands_keep_explicit_root(self):
+        # A manager's location does not select the state root. Use a root with
+        # shell-sensitive characters, distinct from CODEX_HOME and LOCALAPPDATA.
+        self.root = self.home / "custom root's payload"
+        self.root.mkdir()
+        with mock.patch.dict(os.environ, {"CODEX_CONNECT_PYTHON": sys.executable}):
+            self.assertEqual(self.install("v0.2.0"), 0)
+            result = self.run_recovery_command(self.root, "status")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout).get("active"), "v0.2.0")
+            with mock.patch.object(lifecycle, "install_dispatch", side_effect=RuntimeError("power loss")), \
+                    self.assertRaisesRegex(RuntimeError, "power loss"):
+                self.install("v0.2.1")
+            result = self.run_recovery_command(self.root, "recover")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(lifecycle.read_json(self.root / "active.json")["active"], "v0.2.1")
+            self.assertFalse((self.root / "pending.json").exists())
+            self.assertFalse((lifecycle.root_path() / "active.json").exists())
+
+    @unittest.skipIf(os.name == "nt", "Bash bootstrap belongs to the Unix CI matrix")
+    def test_bash_explicit_failure_prints_next_steps_with_original_arguments(self):
+        source = self.payload("v0.2.0")
+        shutil.copyfile(source / "install_lifecycle.py", self.root / "install_lifecycle.py")
+        lifecycle.private_json(self.root / "pending.json", {"id": "preserved"})
+        environment = dict(os.environ, CODEX_CONNECT_BASE=source.as_uri())
+        environment.pop("CODEX_CONNECT_REF", None)
+        script = Path(__file__).resolve().parent / "install.sh"
+        result = subprocess.run(["bash", str(script), "--lab", "--sqlite-home", "a path's database"],
+                                env=environment, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("[NOT_READY]", result.stderr)
+        self.assertEqual(result.stderr.count("[NOT_READY]"), 1)
+        self.assertIn(" status", result.stderr)
+        self.assertIn(" recover", result.stderr)
+        self.assertIn("--root", result.stderr)
+        retry = result.stderr.split("bash -s --", 1)[1].rstrip().removesuffix(")")
+        self.assertEqual(shlex.split(retry), ["--lab", "--sqlite-home", "a path's database"])
+        self.assertNotIn("[READY]", result.stdout + result.stderr)
+        self.assertTrue((self.root / "pending.json").exists())
+
+    @unittest.skipIf(os.name == "nt", "Bash bootstrap belongs to the Unix CI matrix")
+    def test_bash_command_failure_keeps_status_and_reports_once(self):
+        source = self.payload("v0.2.0")
+        (source / "release_manifest.json").unlink()
+        environment = dict(os.environ, CODEX_CONNECT_REF="v0.2.0", CODEX_CONNECT_BASE=source.as_uri())
+        script = Path(__file__).resolve().parent / "install.sh"
+        result = subprocess.run(["bash", str(script), "--lab"], env=environment,
+                                capture_output=True, text=True, timeout=20)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stderr.count("[NOT_READY]"), 1)
+        self.assertIn("[NEXT]", result.stderr)
+        self.assertNotIn("[READY]", result.stdout + result.stderr)
+        self.assertFalse((self.root / "active.json").exists())
 
     @unittest.skipIf(os.name == "nt", "Bash bootstrap belongs to the Unix CI matrix")
     def test_modern_bash_bootstrap_uses_transaction_engine(self):

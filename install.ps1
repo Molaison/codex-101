@@ -190,11 +190,11 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHom
         $KnownManager = Join-Path $KnownRoot 'install_lifecycle.py'
         $KnownPython = if ($env:CODEX_CONNECT_PYTHON) { $env:CODEX_CONNECT_PYTHON } else { Join-Path $KnownRoot 'python\python.exe' }
         if (Test-Path -LiteralPath $KnownManager) {
-            Write-Host ("[NEXT] 本地只读状态：& '{0}' -X utf8 '{1}' status" -f
-                $KnownPython.Replace("'", "''"), $KnownManager.Replace("'", "''"))
+            Write-Host ("[NEXT] 本地只读状态：& '{0}' -X utf8 '{1}' --root '{2}' status" -f
+                $KnownPython.Replace("'", "''"), $KnownManager.Replace("'", "''"), $KnownRoot.Replace("'", "''"))
             if (Test-Path -LiteralPath (Join-Path $KnownRoot 'pending.json')) {
-                Write-Host ("[NEXT] 恢复原事务：& '{0}' -X utf8 '{1}' recover" -f
-                    $KnownPython.Replace("'", "''"), $KnownManager.Replace("'", "''"))
+                Write-Host ("[NEXT] 恢复原事务：& '{0}' -X utf8 '{1}' --root '{2}' recover" -f
+                    $KnownPython.Replace("'", "''"), $KnownManager.Replace("'", "''"), $KnownRoot.Replace("'", "''"))
             }
         }
         $Retry = "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/Molaison/codex-101/main/install.ps1').Content))"

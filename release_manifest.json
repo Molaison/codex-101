@@ -2,9 +2,9 @@
   "codex_channel": "stable",
   "files": {
     "codex_provider.py": "3e0ea5ec697cac1d2a87027835b101c12c70d3ffcec6e71424cd051a8377eafa",
-    "install.ps1": "1faa413d0d25dcd4502cfc1ee52c144bd5bb2b206ab121fdda450e38fa2b7ec7",
-    "install.sh": "fedb79a816a7ca7b3d28aef1c5df22be2402e94f3f6df0ff0783489743d07854",
-    "install_lifecycle.py": "f69010a7fedbc758c0c4d3086329aa12849a1d041e09b0228279b0a0a406a30e",
+    "install.ps1": "3a595d4ab85fb2fe5b0f02235df29e661cc184ed50dc2851002717f1934001b6",
+    "install.sh": "10d2128b48b7ac40241152b2e8061f9617d0ab9366c67a3ee179b53bb0a24ea8",
+    "install_lifecycle.py": "54c811918d728d872349622d99124ff28cdc3c4a49a39e29a4d7819a682bada0",
     "model_catalog.json": "6b3b8d9fb634f69d18018c1f771d5654236cb068d95958230a9aacfaad63ad0b"
   },
   "release": "v0.2.0",

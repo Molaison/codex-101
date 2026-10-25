@@ -56,8 +56,8 @@ def recovery_command(root, action):
         python = Path(os.environ.get("CODEX_CONNECT_PYTHON",
                                     str(Path(root) / "python" / "python.exe")))
         quote = lambda value: "'" + str(value).replace("'", "''") + "'"
-        return "& %s -X utf8 %s %s" % (quote(python), quote(manager), action)
-    return "python3 %s %s" % (shlex.quote(str(manager)), action)
+        return "& %s -X utf8 %s --root %s %s" % (quote(python), quote(manager), quote(root), action)
+    return "python3 %s --root %s %s" % (shlex.quote(str(manager)), shlex.quote(str(root)), action)
 
 
 def print_next_step(root):
