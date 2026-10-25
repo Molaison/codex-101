@@ -188,7 +188,7 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHom
         Write-Warning ("[NOT_READY] 安装未完成：{0}" -f $_.Exception.Message)
         $KnownRoot = Join-Path $env:LOCALAPPDATA 'codex-provider-connect'
         $KnownManager = Join-Path $KnownRoot 'install_lifecycle.py'
-        $KnownPython = if ($env:CODEX_CONNECT_PYTHON) { $env:CODEX_CONNECT_PYTHON } else { Join-Path $KnownRoot 'python\\python.exe' }
+        $KnownPython = if ($env:CODEX_CONNECT_PYTHON) { $env:CODEX_CONNECT_PYTHON } else { Join-Path $KnownRoot 'python\python.exe' }
         if (Test-Path -LiteralPath $KnownManager) {
             Write-Host ("[NEXT] 本地只读状态：& '{0}' -X utf8 '{1}' status" -f
                 $KnownPython.Replace("'", "''"), $KnownManager.Replace("'", "''"))
