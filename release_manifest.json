@@ -1,11 +1,11 @@
 {
   "codex_channel": "stable",
   "files": {
-    "codex_provider.py": "c74af0773a253c155cc1b7afb21e869f015151047e4adc6cb80be0ab7a18185d",
-    "install.ps1": "4891a2a8aa7776de05b08859ba381808d544cd59c438a8259c87a989fc5d2ffd",
-    "install.sh": "7a3f26fe569107b8cb64c5a8792c351a0678a3f937b970a9752cc55bd2dd8dce",
-    "install_lifecycle.py": "67007038509f97cdd915cd92bb27a828aa28b66e4883c190ceac7a9b34ce9d79",
-    "model_catalog.json": "fdd2b988243fd963ab7c9956e814df4c01d17ccdc5cf91dc41dc23c697279a35"
+    "codex_provider.py": "69a71418278dd2afb8707ce524b4b36abcb8da7f990d38b2c0a53a31dcfa90e8",
+    "install.ps1": "3a595d4ab85fb2fe5b0f02235df29e661cc184ed50dc2851002717f1934001b6",
+    "install.sh": "10d2128b48b7ac40241152b2e8061f9617d0ab9366c67a3ee179b53bb0a24ea8",
+    "install_lifecycle.py": "46da189e223baa01db70a06fbe003010a12d2b01adbbeea4e924e6e28038937f",
+    "model_catalog.json": "6b3b8d9fb634f69d18018c1f771d5654236cb068d95958230a9aacfaad63ad0b"
   },
   "release": "v0.2.0",
   "schema": 1
