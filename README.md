@@ -2,7 +2,7 @@
 
 **每位同学只需要自己的 CPR API Key。** 在 Windows、macOS、Linux **本机**运行安装命令；不用 SSH 到 ywl，不必手工写 `config.toml`，不用自己安装 Node.js/npm。
 
-> **版本状态：v0.1.1 修复候选**。安装器自动选择最新稳定 Release；没有稳定版时选择最新预发布版本，所有载荷锁定在同一 tag。仅收到 `[READY]` 且安装程序成功退出，才能认定**自己这台机器**的模型、凭据和真实工具调用已通过。管理员验证范围见 [测试状态](#测试状态)。
+> **版本状态：公开的 v0.1.1 仍为旧安装器；main 中的 v0.2.0 是待发布候选**。以下 SQLite 自动保留和显式选库功能在 v0.2.0 发布后才对一键安装用户生效。安装器自动选择最新稳定 Release；没有稳定版时选择最新预发布版本，所有载荷锁定在同一 tag。仅收到 `[READY]` 且安装程序成功退出，才能认定**自己这台机器**的模型、凭据和真实工具调用已通过。管理员验证范围见 [测试状态](#测试状态)。
 
 ## 一键安装
 
@@ -43,7 +43,7 @@ codex
 | 模型 | `chatgpt-web/gpt-6-tools-temp`，**GPT-6 Web Tools Temporary** |
 | 权限 | `danger-full-access`、`approval_policy=never`（按实验室要求，**不会询问执行批准**） |
 | 稳定性 | **SSE**，HTTP 请求最多重试 **8 次**；SSE 中断最多重试 **12 次**；SSE 空闲超时 **15 分钟** |
-| 存储 | 本机用户私有临时目录存 SQLite；保留原 `CODEX_HOME`、sessions；不覆盖运行中的数据库 |
+| 存储 | 默认尝试使用本机私有临时 SQLite；若目标已有另一份数据或源库仍被占用，则继续沿用原目录，保留双方数据并输出选择命令；保留 `CODEX_HOME`、sessions |
 | 凭据 | 独立私有 Key 文件，使用 `auth.command`；不同服务地址不交叉复用 Key |
 | 模型目录 | **V1-only**，普通菜单保留 9 个经维护目录标注的模型，隐藏内部保留 2 个 |
 
@@ -58,6 +58,21 @@ codex
 出现 `Reconnecting...`：先确认上游回合是否终止；已提交的回合不能仅因前台断线而重复执行。已知 `UPSTREAM_READINESS` 失败会直接返回上次诊断，**不会自动重装或重投**。上游修好后可明确加 `--repair`（PowerShell 用 `-Repair`）重测。
 
 部分账号的 Temporary Chat 工具能力在上游 personalization 预检会失败。保持默认 `temp`，不自动改隐私设置；若明确接受 **Web 账号保存聊天历史**，可在上述 Bash 安装命令末尾增加 `--model chatgpt-web/gpt-6-tools-persist`，Windows 增加 `-Model 'chatgpt-web/gpt-6-tools-persist'`。这只是可选择的恢复路径，HTTPS CPR 仍需使用本人 Key 完成实际工具自检才算通过。
+
+## SQLite 冲突或安装中断后的恢复（v0.2.0 待发布）
+
+旧版 v0.1.1 的 `SQLite 新旧目录均有数据` 是硬中断，**反复执行原命令不会解决**，也不能靠 `CODEX_SQLITE_HOME` 可靠覆盖已有 `sqlite_home` 配置。不要删除 `state_5.sqlite`、`-wal`、`-shm`，更不要把两套文件拼在一起。
+
+在 v0.2.0 及之后：**默认继续使用原本配置/默认使用的数据库**，跳过危险的迁移；新旧目录均原样保留，并在终端打印 `[SQLITE_PRESERVED]` 和完整的切换命令。想显式选择另一份库时，在正常安装命令的 `--lab` 后加 `--sqlite-home '/绝对路径'`；Windows 添加 `-SqliteHome 'C:\\实际目录'`。显式选库只是切换，不会同步、合并历史或删除另一份库。选择前可比较文件修改时间和已有会话；不要在 Codex 正写入数据库时手工移动文件。
+
+新版意外中断时先看终端的 `[NEXT]`。已有版本管理器时，下面两条都不需要联网；**先 status，看见待恢复事务才执行 recover**：
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/provider-connect/install_lifecycle.py" status
+python3 "${CODEX_HOME:-$HOME/.codex}/provider-connect/install_lifecycle.py" recover
+```
+
+`RECOVERY_REQUIRED` 表示无法确认是否已发送真实模型回合，须检查事务日志，不要盲目 `--repair` 或重新发起同一任务。只有实际完成工具调用并收到 `[READY]` 才算安装成功。
 
 ## 测试状态
 
