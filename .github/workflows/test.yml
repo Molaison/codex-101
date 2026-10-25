@@ -60,4 +60,4 @@ jobs:
         env:
           CODEX_HOME: ${{ runner.temp }}/codex101-official-smoke
         run: |
-          python -c "from codex_provider import official_client, client_version; binary=official_client(); print('Verified native Codex:', client_version(binary))"
+          python -c "from codex_provider import official_client, client_version, builtin_catalog; binary=official_client(); models=builtin_catalog(binary); visible=[m.get('slug') for m in models if m.get('visibility') == 'list']; assert visible, 'Official Codex built-in model catalog is empty; refusing to ship a menu that hides native models'; print('Verified native Codex:', client_version(binary), '| built-in models:', len(models), '| visible:', ', '.join(visible))"
