@@ -8,6 +8,12 @@
 
 首次安装不固定 Codex：`codex_provider.py` 读取 npm `@openai/codex/latest`，验证稳定版本号，再解析当前 OS/CPU 平台包的 SHA512。运行中的 Codex 不会因重复执行安装器而静默升级；只有明确执行 `upgrade` 才重新选择最新稳定版。旧二进制及其实际版本、SHA256 保留在当前用户 `CODEX_HOME/provider-connect/official/`，用作离线回滚。
 
+## 一键安装遇到 SQLite 冲突时
+
+v0.2.0 的 `--lab` 在默认迁移前检查原目录和本地临时目录。发现两份不一致的数据、Codex 正在使用旧库或源文件在复制中改变时，不对两个数据库写入合并，也不强制退出安装；**保留已经配置/默认使用的原库**，打印 `[SQLITE_PRESERVED]` 和可复制的完整切换命令。只有源库可安全停写且目标为空时才执行原来的整套 SQLite/WAL/SHM 拷贝。若要改用另一份数据，用安装命令的 `--sqlite-home <绝对路径>` 或 PowerShell 的 `-SqliteHome <绝对路径>` 显式选库，选择不执行文件迁移。原版 v0.1.1 不支持这些参数。
+
+任何本地安装错误都打印确切的 `status` 命令；当存在可安全恢复的 pending 事务时，还打印 `recover`。如果事务处于 `RECOVERY_REQUIRED`，指向 journal 而非建议重复提交无法确认终态的模型回合。
+
 ## 升级流程
 
 1. `upgrade` 查询有完整附件及 manifest 的 codex-101 Release，并按 stable 优先选择；`--codex-only` 使用已经验证的本地 helper/catalog，不要求重新下载本仓库 Release。
