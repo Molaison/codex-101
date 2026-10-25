@@ -226,6 +226,8 @@ def builtin_catalog(binary):
                                     text=True, env=environment, timeout=120)
         except (OSError, subprocess.SubprocessError):
             return []
+    if result.returncode != 0:
+        return []
     for line in result.stdout.splitlines():
         stripped = line.strip()
         if stripped.startswith('{"models"'):
@@ -931,11 +933,28 @@ def native_catalog(connection, binary, v1_only=False):
                                                        or not m["slug"] for m in models):
         raise ValueError("维护的 model catalog 不是有效的非空 Codex 目录；未改写 Codex 配置。")
     if v1_only:
-        # V2 collaboration is prohibited on this cluster; do not relabel unsupported models as V1.
+        # V2 collaboration is prohibited on this cluster; filter the maintained
+        # CPR catalog, but do not apply that filter to the official Codex catalog.
         catalog["models"] = [item for item in models if item.get("multi_agent_version") == "v1"]
         if not any(item["slug"] == LAB_CPR_MODEL for item in catalog["models"]):
             raise ValueError("当前发布目录缺少实验室 V1 Web Tools 默认模型；未修改配置。")
         models = catalog["models"]
+
+    # model_catalog_json replaces the built-in catalog rather than extending it.
+    # Restore the native Codex entries *after* filtering the CPR catalog, otherwise
+    # official models (including models whose metadata marks newer multi-agent
+    # support) silently disappear from /model. Provider entries win on slug clashes.
+    builtins = builtin_catalog(binary)
+    if not builtins:
+        raise ValueError(
+            "无法从官方 Codex 读取内置模型目录（debug models 未返回有效 models）；"
+            "为防止 GPT-6 等官方模型继续消失，本次未写入新目录或修改 Codex 配置。"
+            "请先确认当前官方 Codex 可执行 debug models，再重跑安装命令。")
+    added = merge_builtin(catalog, builtins)
+    if added:
+        print("已恢复 %d 个官方 Codex 内置模型；同 ID 时保留 CPR 目录条目。" % len(added),
+              file=sys.stderr)
+    models = catalog["models"]
     if len({model["slug"] for model in models}) != len(models):
         raise ValueError("维护的 model catalog 包含重复 ID；未改写 Codex 配置。")
     # Keep old paths immutable: existing threads may retain the previous route.
