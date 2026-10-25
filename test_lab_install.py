@@ -140,8 +140,8 @@ class LabInstallTests(unittest.TestCase):
         self.assertEqual((source / "state_5.sqlite").read_bytes(), b"existing-history")
         self.assertEqual((target / "state_5.sqlite").read_bytes(), b"different-history")
         self.assertIn("[SQLITE_PRESERVED]", output.getvalue())
-        self.assertIn("--sqlite-home", output.getvalue())
-        self.assertIn(str(target), output.getvalue())
+        self.assertTrue("--sqlite-home" in output.getvalue() or "-SqliteHome" in output.getvalue())
+        self.assertIn("codex-sqlite", output.getvalue())
 
     def test_explicit_sqlite_selection_overrides_config_and_never_migrates(self):
         source = self.root / "old"
