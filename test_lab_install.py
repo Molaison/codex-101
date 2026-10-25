@@ -21,15 +21,39 @@ class LabInstallTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
-    def test_catalog_only_explicit_v1(self):
-        connection = {"catalog_source": str(Path(__file__).parent / "model_catalog.json")}
-        with mock.patch.object(c, "state_directory", return_value=self.root):
-            catalog = c.native_catalog(connection, [], v1_only=True)
+    def test_catalog_only_explicit_v1_also_restores_official_models(self):
+        source = Path(__file__).parent / "model_catalog.json"
+        connection = {"catalog_source": str(source)}
+        official = [
+            {"slug": "gpt-6-astra", "display_name": "GPT-6 Astra", "visibility": "list",
+             "supported_in_api": True, "multi_agent_version": "v2"},
+            {"slug": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "visibility": "list",
+             "supported_in_api": True, "multi_agent_version": "v2"},
+            {"slug": c.LAB_CPR_MODEL, "display_name": "must-not-replace-provider", "visibility": "list"},
+        ]
+        with mock.patch.object(c, "state_directory", return_value=self.root), \\
+                mock.patch.object(c, "builtin_catalog", return_value=official):
+            catalog = c.native_catalog(connection, [str(self.root / "fixture-codex")], v1_only=True)
         models = json.loads(catalog.read_text(encoding="utf-8"))["models"]
-        self.assertTrue(models)
-        self.assertTrue(all(m.get("multi_agent_version") == "v1" for m in models))
-        self.assertIn(c.LAB_CPR_MODEL, {m["slug"] for m in models})
-        self.assertNotIn("gpt-6.1-sol", {m["slug"] for m in models})
+        by_slug = {m["slug"]: m for m in models}
+        maintained = json.loads(source.read_text(encoding="utf-8"))["models"]
+        allowed_provider = {m["slug"] for m in maintained if m.get("multi_agent_version") == "v1"}
+        excluded_provider = {m["slug"] for m in maintained if m.get("multi_agent_version") != "v1"}
+        self.assertTrue(allowed_provider.issubset(by_slug))
+        self.assertTrue(excluded_provider.isdisjoint(by_slug))
+        self.assertIn(c.LAB_CPR_MODEL, by_slug)
+        self.assertIn("gpt-6-astra", by_slug)
+        self.assertIn("gpt-6.1-sol", by_slug)
+        self.assertEqual(by_slug["gpt-6-astra"]["multi_agent_version"], "v2")
+        self.assertNotEqual(by_slug[c.LAB_CPR_MODEL]["display_name"], "must-not-replace-provider")
+
+    def test_native_catalog_refuses_to_replace_builtins_when_official_catalog_is_unavailable(self):
+        connection = {"catalog_source": str(Path(__file__).parent / "model_catalog.json")}
+        with mock.patch.object(c, "state_directory", return_value=self.root), \\
+                mock.patch.object(c, "builtin_catalog", return_value=[]):
+            with self.assertRaisesRegex(ValueError, "官方模型继续消失"):
+                c.native_catalog(connection, [str(self.root / "fixture-codex")], v1_only=True)
+        self.assertFalse((self.root / "catalogs").exists())
 
     def test_real_upstream_readiness_failure_is_not_misdiagnosed_as_local_network(self):
         code, hint = c.check_problem("Reconnecting... 1/12 (stream disconnected before completion: ChatGPT personalization preflight exceeded its readiness deadline)")
