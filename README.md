@@ -32,7 +32,7 @@ Windows 安装器会在用户目录准备 Python。入口优先选择含完整�
 ## 使用前必须知道
 
 - **执行权限很大**：实验室预设为 `danger-full-access` 和 `approval_policy=never`。Codex 能修改当前用户有权限访问的文件，包括共享目录，不会逐项询问执行批准。先备份重要数据，并从正确的项目目录启动。
-- **默认连接**：`https://cpr.molaisonz.dpdns.org/v1`，模型为 `chatgpt-web/gpt-6-tools-temp`。Key 不跨服务地址复用。
+- **默认连接**：`https://cpr.molaisonz.dpdns.org/v1`，模型为 `chatgpt-web/gpt-6-tools-temp`。Key 不跨服务地址复用。模型菜单会把 CPR 的 V1 维护目录与当前官方 Codex 内置目录合并，避免自定义目录覆盖官方模型元数据；菜单可见不代表 CPR Key 已获该模型权限，所有模型请求仍走当前 CPR endpoint。
 - **隐私边界**：`temp` 表示 Web 临时会话，不保存进 Web 账号聊天历史；不等于服务端零留存。`persist` 保存 Web 账号聊天历史，必须主动选择。两者均与 Codex 本地 sessions 分开。
 - **SQLite 不会自动合并**：默认尝试迁移到本机临时目录。若目标已有数据、旧库仍可能被写入或复制期间有变化，则保留原库并打印 `[SQLITE_PRESERVED]`。不要删除或混拼数据库及 `-wal` / `-shm` 文件；临时目录也不能作为唯一长期备份。
 
