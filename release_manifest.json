@@ -1,7 +1,7 @@
 {
   "codex_channel": "stable",
   "files": {
-    "codex_provider.py": "3e0ea5ec697cac1d2a87027835b101c12c70d3ffcec6e71424cd051a8377eafa",
+    "codex_provider.py": "fc38dca0d97b3d7c0a2c5d5d8b76cd82f27bf01082c9939381bc444e22a34b4b",
     "install.ps1": "3a595d4ab85fb2fe5b0f02235df29e661cc184ed50dc2851002717f1934001b6",
     "install.sh": "10d2128b48b7ac40241152b2e8061f9617d0ab9366c67a3ee179b53bb0a24ea8",
     "install_lifecycle.py": "46da189e223baa01db70a06fbe003010a12d2b01adbbeea4e924e6e28038937f",
