@@ -922,7 +922,7 @@ class NativeRPC:
 
 
 def native_catalog(connection, binary, v1_only=False):
-    """Install the maintained catalog directly, without upstream synchronization."""
+    """Install the maintained CPR catalog and preserve native Codex models, without upstream sync."""
     source = Path(connection.pop("catalog_source", Path(__file__).with_name("model_catalog.json"))).expanduser()
     try:
         catalog = json.loads(source.read_text(encoding="utf-8"))
