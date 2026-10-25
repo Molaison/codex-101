@@ -223,7 +223,8 @@ def builtin_catalog(binary):
         environment.pop("CODEX_PROVIDER_API_KEY", None)
         try:
             result = subprocess.run(binary + ["debug", "models"], capture_output=True,
-                                    text=True, env=environment, timeout=120)
+                                    text=True, encoding="utf-8", errors="replace",
+                                    env=environment, timeout=120)
         except (OSError, subprocess.SubprocessError):
             return []
     if result.returncode != 0:
