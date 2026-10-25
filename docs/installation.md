@@ -88,7 +88,7 @@ V1-only 只过滤 CPR 维护目录中的模型；随后会把当前官方 Codex 
 | 状态 | 下一步 |
 | --- | --- |
 | `AUTH` / `ACCESS` | 分别检查 Key / 请管理员核对模型权限。不要发送 Key 本身作为故障证据。 |
-| `NETWORK` / `ENDPOINT` | 检查当前网络、代理、DNS 和证书；不要关闭 TLS 校验。 |
+| `NETWORK` / `ENDPOINT` | 先跑下一节的 `preflight` 一条命令定位真实原因；不要关闭 TLS 校验。 |
 | `CHECK_PENDING` / `PENDING` | 原自检可能仍在运行，按提示恢复原事务，不新建相同回合。 |
 | `SERVER_BUSY` / `PENDING_RESTART` / `SERVER_RESTART_REQUIRED` | 等已有任务结束，再按提示恢复；不要强杀共享任务。 |
 | `UPSTREAM_COMPAT` | 请维护者检查 CPR / Web 桥接兼容，重装 CLI 不会修复服务端协议。 |
@@ -97,3 +97,24 @@ V1-only 只过滤 CPR 维护目录中的模型；随后会把当前官方 Codex 
 | `OUTPUT_MISMATCH` / 其他未 READY | 提供脱敏状态、时间、客户端版本、模型和目标地址；不要上传整个配置目录。 |
 
 SSE 和重试设置只能缓解部分短暂断流，不能保证修复服务端故障；重试增加也可能延长最终报错时间。`/models` 可用只说明权限预检通过。真实验收标准及历史地址范围见 [CPR 验收说明](01_cpr_acceptance.md)。
+
+### 4.1 预检失败（`NETWORK` / `ENDPOINT`）先跑这一条
+
+安装器只对 `{地址}/models` 做一次权限预检（每次 20 秒、最多 3 次、禁止重定向）；失败时终端会给出带 `reason` 的 JSON 和一条 `next` 命令。只重测这一项，不写配置、不碰 SQLite、不调用模型：
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/provider-connect/codex_provider.py" preflight
+```
+
+Windows：`python "%USERPROFILE%\.codex\provider-connect\codex_provider.py" preflight`（设了 `CODEX_HOME` 时用它）。安装已失败、没有保存 key 时，该命令会提示隐藏输入一次 Key；也可用 `CODEX_PROVIDER_API_KEY` 环境变量提供。
+
+| `reason` | 真实情况 | 处理 |
+| --- | --- | --- |
+| `timeout` | 连续 3 次都超过 20 秒，端点或代理被卡住 | 稍后重跑；仍失败把 JSON 与发生时间发给维护者 |
+| `connection` / `refused` / `reset` | 代理或网关瞬断、连接被重置 | 重跑 `preflight`，通常下一次就通过 |
+| `dns` | 域名解析失败 | 检查 DNS 或代理的域名解析 |
+| `tls` | TLS 握手或证书校验失败 | 检查代理是否替换了证书；不要关闭校验 |
+| `http` | 网关返回可重试的 5xx / 429（已重试 3 次） | 等网关恢复后重跑 |
+| `body` | 拿到了 HTTP 响应但不是 JSON，多为代理/网关错误页 | 不是本机断网；把 `detail` 内容发给维护者 |
+
+预检自动重试 2 次，所以偶发失败通常自己就过去了。`preflight` 通过后重跑原安装命令即可继续，不需要 `--repair`。

@@ -2,7 +2,7 @@
 
 在自己的 Windows、macOS 或 Linux 电脑上，用个人 CPR Key 配置未经修改的官方 Codex。无需 SSH 到维护机，也无需安装 Node.js/npm 或手写配置。
 
-> **v0.2.0 preview 候选，尚未发布**：本文说明候选源码中的功能；一键安装只使用已公开 Release，附件以 [Releases](https://github.com/Molaison/codex-101/releases) 为准。预发布不代表稳定版；CI 通过也不代表目标 HTTPS CPR 已通过真实工具验收。
+> **v0.2.0 preview**：发布状态以 [Releases](https://github.com/Molaison/codex-101/releases) 为准。一键安装只使用已公开 Release（附件齐全、稳定版优先，否则取最新预发布），所以 `main` 比 Release 新时，安装器仍会选上一个已发布版本，并在终端打印选中的 tag 与原因。
 
 ## 安装并开始使用
 
@@ -65,7 +65,7 @@ Windows 命令、仅升级 Codex、离线回滚及路径说明见 [升级与恢�
 
 **两个版本要分开看**：`v0.2.0` 是本安装器版本；官方 Codex 的实际版本见 `status` 输出中的 `codex_version`。首次安装选择 npm 的最新稳定 Codex，后续复用完好的已安装副本；显式 `upgrade` 才主动查询升级。安装器是 preview，不影响官方客户端使用 stable 渠道。
 
-安装失败先看终端 `[NEXT]`。`RECOVERY_REQUIRED` 表示无法安全自动继续，例如不能确定真实回合是否已经提交；保留日志，不要盲目 `--repair`、删除事务记录或重复发起任务。`UPSTREAM_READINESS` 通常需要维护者处理上游，反复安装不会修好服务端。
+安装失败先看终端 `[NEXT]`。预检失败（`NETWORK` / `ENDPOINT`）时，先跑终端给出的那条 `python3 …/codex_provider.py preflight`：它只重测连接，带 `reason` 说明是超时、代理瞬断、证书还是网关错误页。`RECOVERY_REQUIRED` 表示无法安全自动继续，例如不能确定真实回合是否已经提交；保留日志，不要盲目 `--repair`、删除事务记录或重复发起任务。`UPSTREAM_READINESS` 通常需要维护者处理上游，反复安装不会修好服务端。
 
 ## 验证范围
 

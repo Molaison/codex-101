@@ -12,6 +12,9 @@ install_failure() {
     else
         printf '\n[NOT_READY] 安装未完成（退出码 %s）；旧数据未被安装器清理。\n' "$status" >&2
     fi
+    if [[ -f "$root/codex_provider.py" ]]; then
+        printf '[NEXT] 只重测 endpoint（不改配置、不调用模型）：python3 %q preflight\n' "$root/codex_provider.py" >&2
+    fi
     if [[ -f "$root/install_lifecycle.py" ]]; then
         printf '[NEXT] 查看安装状态（本地只读）：python3 %q --root %q status\n' "$root/install_lifecycle.py" "$root" >&2
         if [[ -f "$root/pending.json" ]]; then
@@ -50,16 +53,60 @@ main() {
         fi
         # Pin all payloads to one published tag. Prefer stable; until the first
         # stable release exists, keep using the newest explicit prerelease.
+        # Say which tag was chosen, so a gap against main needs no explanation.
         if ! release=$(curl --http1.1 --fail --silent --show-error --location --retry 2 --max-time 30 \
             -H 'Accept: application/vnd.github+json' \
             'https://api.github.com/repos/Molaison/codex-101/releases?per_page=30' |
-            python3 -c 'import json,re,sys; releases=json.load(sys.stdin); required={"install.sh","install.ps1","codex_provider.py","model_catalog.json"}; valid=[r for r in releases if not r.get("draft") and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+",r.get("tag_name","")) and required <= {a.get("name") for a in r.get("assets",[])}]; chosen=next((r for r in valid if not r.get("prerelease")),valid[0] if valid else None); print(chosen["tag_name"] if chosen else "",end="")'); then
+            python3 -c 'import json,re,sys
+needed = ("install.sh", "install.ps1", "codex_provider.py", "model_catalog.json")
+eligible, skipped = [], []
+for item in json.load(sys.stdin):
+    tag = item.get("tag_name") or ""
+    names = {asset.get("name") for asset in item.get("assets") or []}
+    if item.get("draft") or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
+        continue
+    missing = [name for name in needed if name not in names]
+    if missing:
+        skipped.append((tag, "、".join(missing)))
+    else:
+        eligible.append(item)
+for tag, missing in skipped:
+    sys.stderr.write("跳过 %s：该 Release 缺少附件 %s\n" % (tag, missing))
+chosen = next((item for item in eligible if not item.get("prerelease")), eligible[0] if eligible else None)
+if chosen is None:
+    sys.stderr.write("已发布的 Release 中没有同时含四个安装附件的版本。\n")
+    print("", end="")
+else:
+    reason = "最新稳定 Release" if not chosen.get("prerelease") else "无稳定 Release，取最新预发布"
+    others = "、".join(item["tag_name"] for item in eligible if item is not chosen) or "无"
+    sys.stderr.write("已选 %s（%s）；其它已发布候选：%s\n" % (chosen["tag_name"], reason, others))
+    print(chosen["tag_name"], end="")'); then
             printf '无法从 GitHub 读取发布版本；未改动本机安装。\n' >&2
             return 1
         fi
         if [[ -z "$release" ]]; then
             printf '没有找到含四个安装附件的发布版本；未改动本机安装。\n' >&2
             return 1
+        fi
+    fi
+    # Interactive only: a newer source tree is not installable, so say so instead
+    # of leaving the user to guess why an older published release was pinned.
+    # Skipped for piped runs, which must stay a pure download of the release.
+    if [[ -t 2 && -z "${CODEX_CONNECT_REF:-}" ]]; then
+        # A newer source tree is not installable: say so, instead of leaving the
+        # user to guess why an older published release was pinned.
+        if source_release=$(curl --http1.1 -fsS --max-time 10 --retry 1 \
+            'https://raw.githubusercontent.com/Molaison/codex-101/main/release_manifest.json' 2>/dev/null |
+            RELEASE="$release" python3 -c 'import json,os,sys
+def digits(tag):
+    return tuple(int(part) for part in tag.lstrip("v").split(".") if part.isdigit())
+try:
+    source = json.load(sys.stdin).get("release") or ""
+except ValueError:
+    sys.exit(0)
+if digits(source) > digits(os.environ.get("RELEASE", "v0.0.0")):
+    print(source, end="")') && [[ -n "$source_release" ]]; then
+            printf '提示：源码 main 已是 %s，但该版本还没有发布 Release；安装器只安装已发布附件。\n' "$source_release" >&2
         fi
     fi
     base="https://github.com/Molaison/codex-101/releases/download/${release}"

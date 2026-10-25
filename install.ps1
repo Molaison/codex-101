@@ -16,18 +16,32 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHom
         if ($env:CODEX_CONNECT_BASE) { throw 'Set CODEX_CONNECT_REF when using CODEX_CONNECT_BASE.' }
         $Releases = @(Invoke-RestMethod -UseBasicParsing -Uri 'https://api.github.com/repos/Molaison/codex-101/releases?per_page=30' -Headers @{Accept='application/vnd.github+json'} -TimeoutSec 30)
         $Eligible = @()
+        $Skipped = @()
         foreach ($Item in $Releases) {
             if ($Item.draft -or $Item.tag_name -notmatch '^v\d+\.\d+\.\d+$') { continue }
             $Names = @($Item.assets | ForEach-Object { $_.name })
             if (($Names -contains 'install.sh') -and ($Names -contains 'install.ps1') -and
                 ($Names -contains 'codex_provider.py') -and ($Names -contains 'model_catalog.json')) {
                 $Eligible += $Item
+            } else {
+                $Skipped += $Item.tag_name
             }
         }
+        if ($Skipped.Count) { Write-Host ('Skipped (missing installer assets): ' + ($Skipped -join ', ')) }
         $Selected = $Eligible | Where-Object { -not $_.prerelease } | Select-Object -First 1
         if (-not $Selected) { $Selected = $Eligible | Select-Object -First 1 }
         if (-not $Selected) { throw 'No published codex-101 release contains all four installer assets.' }
         $Release = $Selected.tag_name
+        $Reason = if ($Selected.prerelease) { 'no stable release yet, newest prerelease' } else { 'newest stable release' }
+        $Others = @($Eligible | Where-Object { $_.tag_name -ne $Release } | ForEach-Object { $_.tag_name })
+        $OtherText = if ($Others.Count) { $Others -join ', ' } else { 'none' }
+        Write-Host ('Selected {0} ({1}); other published candidates: {2}' -f $Release, $Reason, $OtherText)
+        try {
+            $SourceManifest = Invoke-RestMethod -UseBasicParsing -TimeoutSec 10 -Uri 'https://raw.githubusercontent.com/Molaison/codex-101/main/release_manifest.json'
+            if ($SourceManifest.release -and [version]$SourceManifest.release.TrimStart('v') -gt [version]$Release.TrimStart('v')) {
+                Write-Host ('Note: source main is already {0}, which has no published release yet; only published assets are installed.' -f $SourceManifest.release)
+            }
+        } catch { }
     }
     $Base = if ($env:CODEX_CONNECT_BASE) { $env:CODEX_CONNECT_BASE } elseif ($env:CODEX_CONNECT_REF -and $Release -notmatch '^v\d+\.\d+\.\d+$') {
         "https://raw.githubusercontent.com/Molaison/codex-101/$Release"

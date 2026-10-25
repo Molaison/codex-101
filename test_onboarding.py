@@ -54,6 +54,7 @@ print(json.dumps({'type':'turn.completed'}))
         self.env.pop("CODEX_PROVIDER_NAME", None)
         self.requests = []
         self.status = 200
+        self.body = None
         case = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -62,7 +63,7 @@ print(json.dumps({'type':'turn.completed'}))
 
             def do_GET(self):
                 case.requests.append(self.path)
-                body = json.dumps({"models": [{"slug": MODEL, "visibility": "list", "supported_in_api": True}]}).encode()
+                body = case.body or json.dumps({"models": [{"slug": MODEL, "visibility": "list", "supported_in_api": True}]}).encode()
                 self.send_response(case.status)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
@@ -227,8 +228,46 @@ print(json.dumps({'type':'turn.completed'}))
         with mock.patch.dict(os.environ, {"ALL_PROXY": "http://127.0.0.1:9", "NO_PROXY": ""}, clear=True):
             result = connector.native_preflight({"url": self.url, "api_key": "private-fixture"}, MODEL)
         self.assertEqual(result["code"], "NETWORK")
+        self.assertEqual(result["attempts"], connector.PREFLIGHT_ATTEMPTS)
+        self.assertIn(result["reason"], ("connection", "refused", "reset"))
         self.assertEqual(self.requests, [])
         self.assertEqual(self.calls(), 0)
+
+    def test_native_preflight_retries_transient_gateway_errors(self):
+        self.status = 503
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            result = connector.native_preflight({"url": self.url, "api_key": "private-fixture"}, MODEL)
+        self.assertEqual((result["code"], result["reason"], result["attempts"]), ("ENDPOINT", "http", 3))
+        self.assertEqual(self.requests, ["/v1/models"] * 3)
+        self.assertEqual(self.calls(), 0)
+
+    def test_native_preflight_names_an_html_gateway_page_as_body(self):
+        self.body = b"<html><title>502 Bad Gateway</title></html>"
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            result = connector.native_preflight({"url": self.url, "api_key": "private-fixture"}, MODEL)
+        self.assertEqual((result["code"], result["reason"], result["attempts"]), ("NETWORK", "body", 1))
+        self.assertIn("Bad Gateway", result["detail"])
+        self.assertIn("不是本机断网", result["hint"])
+        self.assertNotIn("private-fixture", json.dumps(result))
+
+    def test_preflight_command_retests_without_touching_saved_configuration(self):
+        checked = self.run_cli("preflight", "--url", self.url, "--json")
+        self.assertEqual(checked.returncode, 0, checked.stderr + checked.stdout)
+        self.assertEqual(json.loads(checked.stdout)["code"], "ENDPOINT_OK")
+        self.assertFalse((self.home / "codex-home/provider-connect/connection.json").exists())
+        self.body = b"<html>gateway page</html>"
+        failed = self.run_cli("preflight", "--url", self.url, "--json")
+        self.assertEqual(failed.returncode, 1)
+        report = json.loads(failed.stdout)
+        self.assertEqual(report["reason"], "body")
+        self.assertIn("checked_at", report)
+        self.assertNotIn(self.env["CODEX_PROVIDER_API_KEY"], failed.stdout + failed.stderr)
+
+    def test_failed_preflight_carries_the_copy_paste_retest_command(self):
+        command = connector.preflight_command_line("https://cpr.example.invalid/v1", MODEL)
+        self.assertIn("preflight", command)
+        self.assertIn("https://cpr.example.invalid/v1", command)
+        self.assertIn(MODEL, command)
 
 
 class OfficialInstallTests(unittest.TestCase):

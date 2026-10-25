@@ -4,6 +4,7 @@
 import argparse
 import base64
 import csv
+from datetime import datetime, timezone
 import getpass
 import hashlib
 import json
@@ -16,6 +17,7 @@ import secrets
 import shlex
 import shutil
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -1350,37 +1352,138 @@ def native_configure(binary, connection, model, lab_sqlite=None):
             "server_identity": identity, "visible_models": menu, "config_backup": str(backup) if backup else None}
 
 
+PREFLIGHT_ATTEMPTS = 3
+PREFLIGHT_TIMEOUT = 20
+# Gateway restarts and proxy resets are momentary, so retrying is worthwhile.
+# Authorization and catalog problems are terminal on the first response, so a
+# retry can never turn a real ACCESS/AUTH failure into a false success.
+PREFLIGHT_RETRY_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504,
+                                    520, 521, 522, 523, 524, 525, 526})
+
+
+def preflight_reason(error):
+    """Name the real cause so NETWORK stops standing for four different failures."""
+    if isinstance(error, (socket.timeout, TimeoutError)):
+        return "timeout"
+    if isinstance(error, ssl.SSLError):
+        return "tls"
+    if isinstance(error, socket.gaierror):
+        return "dns"
+    if isinstance(error, ConnectionRefusedError):
+        return "refused"
+    if isinstance(error, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+        return "reset"
+    if isinstance(error, urllib.error.URLError):
+        return preflight_reason(error.reason) if isinstance(error.reason, BaseException) else "connection"
+    text = (type(error).__name__ + ": " + str(error)).lower()
+    for needle, reason in (("timed out", "timeout"), ("certificate", "tls"), ("ssl", "tls"),
+                           ("getaddrinfo", "dns"), ("name or service not known", "dns"),
+                           ("nodename nor servname", "dns"), ("refused", "refused"),
+                           ("reset", "reset")):
+        if needle in text:
+            return reason
+    return "connection"
+
+
+def preflight_excerpt(value, secret, limit):
+    """Single-line, secret-free excerpt for the persisted failure report."""
+    text = str(value)
+    if secret:
+        text = text.replace(secret, "***")
+    return " ".join(text.split())[:limit]
+
+
+def preflight_hint(reason, endpoint, attempts, detail):
+    target = urllib.parse.urlsplit(endpoint).netloc or endpoint
+    if reason == "timeout":
+        return ("%s 连续 %d 次预检超时（每次 %d 秒）：这是端点或代理变慢、被卡住，不是本机断网。"
+                "稍后重跑同一安装命令；仍失败请把本 JSON 与发生时间发给维护者。"
+                % (target, attempts, PREFLIGHT_TIMEOUT))
+    if reason == "dns":
+        return "无法解析 %s；先确认 DNS 或代理的域名解析，再重跑同一安装命令。未改动本机安装。" % target
+    if reason == "tls":
+        return "%s 的 TLS 握手或证书校验失败；不要关闭 TLS 校验，先检查代理是否替换了证书。" % target
+    if reason == "http":
+        return ("预检连续 %d 次收到可重试的 HTTP 错误（%s）：通常是网关或 Cloudflare 刚重启，"
+                "稍后重跑同一安装命令即可。" % (attempts, detail))
+    if reason == "body":
+        return ("预检收到 HTTP 响应但不是 JSON（%s）：这通常是代理或网关返回的错误页，不是本机断网；"
+                "稍后重跑，仍失败时把这段内容发给维护者。" % detail)
+    return ("%s 连接失败（%s）：可能是代理或网关瞬断。稍后重跑同一安装命令；未改动本机安装。"
+            % (target, detail))
+
+
+def preflight_failure(failure, endpoint, attempts):
+    report = {"status": "failed", "code": failure["code"], "reason": failure["reason"],
+              "detail": failure["detail"], "attempts": attempts}
+    report["hint"] = preflight_hint(failure["reason"], endpoint, attempts, failure["detail"])
+    return report
+
+
+def preflight_command_line(endpoint, model):
+    """The one copy-paste command that re-runs only this probe."""
+    parts = [sys.executable or "python3", str(Path(__file__).resolve()), "preflight",
+             "--url", endpoint, "--model", model]
+    return subprocess.list2cmdline(parts) if os.name == "nt" else " ".join(shlex.quote(part) for part in parts)
+
+
 def native_preflight(connection, model):
-    """Check the supplied endpoint/key, without synchronizing catalog metadata."""
+    """Check endpoint/key without synchronizing catalog metadata or weakening TLS."""
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *unused):
             return None  # Do not forward credentials to a redirected endpoint.
-    proxies = urllib.request.getproxies()
-    for scheme in ("http", "https"):
-        if scheme not in proxies and proxies.get("all"):
-            proxies[scheme] = proxies["all"]
+    proxies = {}
+    if not connection.get("direct"):
+        proxies = urllib.request.getproxies()
+        for scheme in ("http", "https"):
+            if scheme not in proxies and proxies.get("all"):
+                proxies[scheme] = proxies["all"]
     opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies), NoRedirect())
-    request = urllib.request.Request(connection["url"] + "/models", headers={
-        "Authorization": "Bearer " + resolved_key(connection), "Accept": "application/json"})
-    try:
-        with opener.open(request, timeout=20) as response:
-            payload = response.read(4 * 1024 * 1024 + 1)
-        data = json.loads(payload)
-        models = data.get("data", data.get("models"))
-        if not isinstance(models, list):
-            raise ValueError("invalid models response")
-        available = {item.get("id", item.get("slug")) for item in models if isinstance(item, dict)}
-        if model not in available:
-            return {"status": "failed", "code": "ACCESS",
-                    "hint": "该 key 的 /models 中没有所选模型；请维护者开放权限，或用 --model 选择已授权模型。未提交模型请求。"}
-        return {"status": "network_ok", "code": "ENDPOINT_OK"}
-    except urllib.error.HTTPError as error:
-        code = "AUTH" if error.code == 401 else "ACCESS" if error.code == 403 else "ENDPOINT"
-        return {"status": "failed", "code": code,
-                "hint": "endpoint/key 预检返回 HTTP %s；检查 API 根地址、key 和权限后重跑同一安装命令。未提交模型请求。" % error.code}
-    except (ValueError, OSError, urllib.error.URLError):
-        return {"status": "failed", "code": "NETWORK",
-                "hint": "endpoint 预检失败：检查地址、HTTP(S)/ALL_PROXY、NO_PROXY 与证书后重跑同一安装命令。未绕过代理、关闭 TLS 校验或提交模型请求。"}
+    endpoint = connection["url"].rstrip("/")
+    secret = resolved_key(connection)
+    failure = None
+    for attempt in range(1, PREFLIGHT_ATTEMPTS + 1):
+        request = urllib.request.Request(endpoint + "/models", headers={
+            "Authorization": "Bearer " + secret, "Accept": "application/json"})
+        try:
+            with opener.open(request, timeout=PREFLIGHT_TIMEOUT) as response:
+                status = response.getcode()
+                payload = response.read(4 * 1024 * 1024 + 1)
+        except urllib.error.HTTPError as error:
+            if error.code == 401:
+                return {"status": "failed", "code": "AUTH", "reason": "http", "detail": "HTTP 401",
+                        "attempts": attempt,
+                        "hint": "预检返回 HTTP 401：key 无效或已过期；更换 key 后重跑同一安装命令。未提交模型请求。"}
+            if error.code == 403:
+                return {"status": "failed", "code": "ACCESS", "reason": "http", "detail": "HTTP 403",
+                        "attempts": attempt,
+                        "hint": "预检返回 HTTP 403：该 key 没有此地址的权限；联系维护者核对后重跑。未提交模型请求。"}
+            failure = {"code": "ENDPOINT", "reason": "http", "detail": "HTTP %s" % error.code}
+            if error.code not in PREFLIGHT_RETRY_STATUS:
+                return preflight_failure(failure, endpoint, attempt)
+        except (OSError, urllib.error.URLError) as error:
+            failure = {"code": "NETWORK", "reason": preflight_reason(error),
+                       "detail": preflight_excerpt("%s: %s" % (type(error).__name__, error), secret, 200)}
+        else:
+            try:
+                data = json.loads(payload)
+            except ValueError:
+                excerpt = preflight_excerpt(payload[:400].decode("utf-8", "replace"), secret, 160)
+                return preflight_failure({"code": "NETWORK", "reason": "body",
+                                          "detail": "HTTP %s %s" % (status, excerpt)}, endpoint, attempt)
+            models = data.get("data", data.get("models")) if isinstance(data, dict) else None
+            if not isinstance(models, list):
+                return preflight_failure({"code": "NETWORK", "reason": "body",
+                                          "detail": "HTTP %s 的 JSON 不含模型列表" % status}, endpoint, attempt)
+            available = {item.get("id", item.get("slug")) for item in models if isinstance(item, dict)}
+            if model not in available:
+                return {"status": "failed", "code": "ACCESS", "reason": "model", "attempts": attempt,
+                        "hint": "该 key 的 /models 中没有所选模型；请维护者开放权限，或用 --model 选择已授权模型。未提交模型请求。"}
+            return {"status": "network_ok", "code": "ENDPOINT_OK", "attempts": attempt,
+                    "models_visible": len(available)}
+        if attempt < PREFLIGHT_ATTEMPTS:
+            time.sleep(min(2 ** (attempt - 1), 3))
+    return preflight_failure(failure, endpoint, PREFLIGHT_ATTEMPTS)
 
 
 def native_server_idle(rpc):
@@ -1643,6 +1746,55 @@ def model_check(binary, connection, catalog, model, retry=False, wait_seconds=60
         time.sleep(2)
 
 
+def preflight_recheck(arguments):
+    """Retest one endpoint quickly; never writes config or submits a model turn."""
+    parser = argparse.ArgumentParser(prog="codex-provider preflight",
+                                     description="只重做 endpoint /models 预检；不写配置、不提交模型请求，可安全重复执行。")
+    parser.add_argument("--url", default=os.environ.get("CODEX_PROVIDER_URL"))
+    parser.add_argument("--model")
+    network = parser.add_mutually_exclusive_group()
+    network.add_argument("--direct", dest="direct", action="store_true", default=None,
+                         help="显式直连该地址，不修改全局代理")
+    network.add_argument("--use-proxy", dest="direct", action="store_false")
+    parser.add_argument("--json", action="store_true", help="只输出脱敏 JSON")
+    args = parser.parse_args(arguments)
+    saved = saved_connection() or {}
+    last = {}
+    record = state_directory() / "native-installation.json"
+    if record.exists():
+        try:
+            last = json.loads(record.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            last = {}
+    # A failed install saves the attempted endpoint/model but never the key, so
+    # this command can retest the same target with a fresh key or prompt once.
+    endpoint = args.url or saved.get("url") or last.get("endpoint") or LAB_CPR_URL
+    model = args.model or saved.get("default_model") or last.get("model") or LAB_CPR_MODEL
+    connection = {"url": endpoint,
+                  "direct": args.direct if args.direct is not None else bool(saved.get("direct", False))}
+    for name in ("api_key", "auth_command", "auth_options"):
+        if saved.get(name):
+            connection[name] = saved[name]
+    if not connection.get("api_key") and not connection.get("auth_command"):
+        key = os.environ.get("CODEX_PROVIDER_API_KEY") or (prompt_key() if sys.stdin.isatty() else "")
+        if not key:
+            raise ValueError("没有可用的 key；用 CODEX_PROVIDER_API_KEY 提供，或重跑安装命令。未做任何请求。")
+        connection["api_key"] = key
+    report = native_preflight(connection, model)
+    report.update(endpoint=endpoint, model=model,
+                  checked_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False))
+    elif report["status"] == "network_ok":
+        print("[ENDPOINT_OK] %s 第 %d 次尝试成功；该 key 能看到 %s（/models 共 %d 个）。"
+              % (endpoint, report.get("attempts", 1), model, report.get("models_visible", 0)))
+        print("这只说明预检通过；安装是否成功仍以真实只读工具自检为准。")
+    else:
+        print(json.dumps(report, ensure_ascii=False))
+        print("[NEXT] 按上面的 reason 处理，再重跑同一安装命令；不要关闭 TLS 校验或绕过代理。")
+    return 0 if report["status"] == "network_ok" else 1
+
+
 def doctor(arguments, prepared=None):
     parser = argparse.ArgumentParser(prog="codex-provider doctor", description="默认只检查连接与模型目录；--check 发起/恢复一次真实只读工具自检。")
     parser.add_argument("--check", action="store_true")
@@ -1835,8 +1987,10 @@ def native_setup(arguments):
                             for key in ("url", "api_key", "auth_command", "auth_options", "default_model", "catalog_file", "integration", "client_version"))
     connection["generation"] = previous.get("generation") if same and previous.get("generation") else secrets.token_hex(12)
     preflight = native_preflight(connection, model)
-    preflight.update(endpoint=connection["url"], model=model)
+    preflight.update(endpoint=connection["url"], model=model,
+                     checked_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
     if preflight["status"] == "failed":
+        preflight["next"] = preflight_command_line(connection["url"], model)
         private_json(state_directory() / "native-installation.json", preflight)
         print(json.dumps(preflight, ensure_ascii=False))
         return 1
@@ -2189,6 +2343,7 @@ def main():
 
   codex-provider setup [--url URL]       一键配置；缺客户端时安装官方原版，最后执行真实只读自检
   codex-provider doctor                 检查客户端、连接和最新模型目录，不调用模型
+  codex-provider preflight              只重做 endpoint /models 预检，不写配置、不调用模型
   codex-provider doctor --check         发起或查询一次真实工具自检；--retry-check 明确重试
   codex-provider repair                 补齐客户端、同步目录，再验证一次真实调用；未结束的自检只恢复
   codex-provider repair --reconfigure   重新输入地址与密钥，再验证实际调用
@@ -2218,6 +2373,8 @@ def main():
         return setup(arguments[1:], repair=arguments[0] == "repair")
     if arguments and arguments[0] == "doctor":
         return doctor(arguments[1:])
+    if arguments and arguments[0] == "preflight":
+        return preflight_recheck(arguments[1:])
     if len(arguments) == 2 and arguments[0] == "_check-worker":
         check_worker(Path(arguments[1]))
         return

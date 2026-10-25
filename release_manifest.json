@@ -1,9 +1,9 @@
 {
   "codex_channel": "stable",
   "files": {
-    "codex_provider.py": "69a71418278dd2afb8707ce524b4b36abcb8da7f990d38b2c0a53a31dcfa90e8",
-    "install.ps1": "3a595d4ab85fb2fe5b0f02235df29e661cc184ed50dc2851002717f1934001b6",
-    "install.sh": "10d2128b48b7ac40241152b2e8061f9617d0ab9366c67a3ee179b53bb0a24ea8",
+    "codex_provider.py": "8ef139bdce30f4982d599f07e1b51e0835eed1af33e9f13a84f0b88db80bc77f",
+    "install.ps1": "31b04281e4357c39f44d7c0ae48aeaf808a6d4985cce55c6b095f23cff4c0f6f",
+    "install.sh": "91fac7b2dd5bd52ddf110b7514b316c238ebe9d1421c992f6cb34b51328a63cf",
     "install_lifecycle.py": "46da189e223baa01db70a06fbe003010a12d2b01adbbeea4e924e6e28038937f",
     "model_catalog.json": "6b3b8d9fb634f69d18018c1f771d5654236cb068d95958230a9aacfaad63ad0b"
   },
