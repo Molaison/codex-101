@@ -45,4 +45,4 @@ jobs:
           gh release create "$REQUESTED_TAG" --target "$GITHUB_SHA" --prerelease \
             --title "$REQUESTED_TAG (preview)" \
             install.sh install.ps1 codex_provider.py model_catalog.json \
-            install_lifecycle.py release_manifest.json
+            install_lifecycle.py magpie_support.py release_manifest.json

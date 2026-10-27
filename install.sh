@@ -9,7 +9,7 @@ main() {
     local root="${CODEX_HOME:-${HOME}/.codex}/provider-connect"
     local destination="${root}/codex_provider.py"
     local stamp="${root}/payload-ref"
-    local temporary damaged_helper=false cached=false
+    local temporary damaged_helper=false cached=false wants_magpie=false
     for command in curl python3; do
         if ! command -v "$command" >/dev/null 2>&1; then
             printf '缺少 %s；请安装后重跑同一命令。\n' "$command" >&2
@@ -18,6 +18,7 @@ main() {
     done
     for argument in "$@"; do
         case "$argument" in
+            --magpie) wants_magpie=true ;;
             --client|--client-sha256|--patch-catalog-limit)
                 printf '%s 不属于原生接入；此安装器不修改 Codex 二进制。\n' "$argument" >&2
                 return 1 ;;
@@ -55,6 +56,7 @@ main() {
     if [[ "$release" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] &&
        (( 10#${BASH_REMATCH[1]} > 0 || 10#${BASH_REMATCH[2]} >= 2 )); then
         if [[ -f "$root/install_lifecycle.py" && -f "$root/releases/$release/release_manifest.json" ]] &&
+           { ! $wants_magpie || [[ -f "$root/releases/$release/magpie_support.py" ]]; } &&
            python3 "$root/install_lifecycle.py" --root "$root" verify --release "$release" >/dev/null 2>&1; then
             printf '复用已验证的本地 %s 发布组件。\n' "$release" >&2
             python3 "$root/install_lifecycle.py" --root "$root" install \
@@ -63,7 +65,7 @@ main() {
         fi
         temporary=$(mktemp -d "${root}/.installer.XXXXXX")
         trap 'rm -rf -- "${temporary:-}"' EXIT
-        for payload in release_manifest.json install_lifecycle.py codex_provider.py model_catalog.json; do
+        for payload in release_manifest.json install_lifecycle.py codex_provider.py model_catalog.json magpie_support.py; do
             curl --http1.1 --fail --silent --show-error --location --retry 2 --max-time 180 \
                 "${base}/${payload}" -o "${temporary}/${payload}"
         done
@@ -75,6 +77,7 @@ main() {
     # not download the same helper/catalog again; mutable refs always refresh.
     if [[ "$release" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && -z "${CODEX_CONNECT_BASE:-}" \
           && -f "$stamp" && ! -L "$destination" && -f "$destination" && -f "$root/model_catalog.json" ]] \
+       && { ! $wants_magpie || [[ -f "$root/magpie_support.py" && ! -L "$root/magpie_support.py" ]]; } \
        && [[ $(cat "$stamp") == "$release" ]] \
        && grep -Fqx "VERSION = \"${release#v}\"" "$destination" \
        && python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$destination" \
@@ -104,6 +107,12 @@ main() {
             return 1
         fi
         python3 -c 'import json,sys; x=json.load(open(sys.argv[1])); assert isinstance(x.get("models"),list) and x["models"], "Invalid model catalog"' "$temporary/model_catalog.json"
+        if $wants_magpie; then
+            curl --http1.1 --fail --silent --show-error --location --retry 2 "${base}/magpie_support.py" -o "$temporary/magpie_support.py"
+            python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$temporary/magpie_support.py"
+            chmod 600 "$temporary/magpie_support.py"
+            mv -f -- "$temporary/magpie_support.py" "$root/magpie_support.py"
+        fi
         chmod 600 "$temporary/codex_provider.py" "$temporary/model_catalog.json"
         if $damaged_helper; then
             local backup
@@ -123,7 +132,7 @@ main() {
     fi
     python3 "$destination" _native-setup "$@"
     printf '\n[READY] 原生配置、模型菜单和真实只读工具自检通过。\n'
-    if [[ " $* " == *" --lab "* || " $* " == *" --lab-ywl "* ]]; then
+    if [[ " $* " == *" --lab "* || " $* " == *" --lab-ywl "* || " $* " == *" --magpie "* ]]; then
         printf '启动：打开新终端，运行 codex；若现有客户端仍占用命令名，可直接运行 %s/.local/share/codex-lab/bin/codex。\n' "$HOME"
         return
     fi

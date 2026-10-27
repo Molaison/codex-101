@@ -22,10 +22,10 @@ jobs:
           python-version: '3.11'
       - name: Unix native integration and installer contract tests
         if: runner.os != 'Windows'
-        run: python -m unittest -q test_lab_install test_onboarding test_profiles test_install_lifecycle
+        run: python -m unittest -q test_lab_install test_onboarding test_profiles test_install_lifecycle test_magpie_onboarding test_magpie_support test_magpie_bootstrap
       - name: Windows lab configuration and launcher contract tests
         if: runner.os == 'Windows'
-        run: python -X utf8 -m unittest -q test_lab_install test_install_lifecycle
+        run: python -X utf8 -m unittest -q test_lab_install test_install_lifecycle test_magpie_onboarding test_magpie_support test_magpie_bootstrap
       - name: Release payload digest and stable channel contract
         run: python 01_build_release_manifest.py --check
       - name: Bash installer syntax

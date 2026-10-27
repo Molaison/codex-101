@@ -1,5 +1,7 @@
 # codex-101 · 实验室 Codex 安装与使用
 
+> 新增 Magpie 接入候选：安装命令增加 `--magpie`（Windows 为 `-Magpie`），即可一次安装官方 Codex、配置实验室 CPR 来源和本机临时 SQLite。仍须完成真实工具自检才返回 `[READY]`。此模式先在 `feat/magpie-cpr-one-command` 分支验证，不改变既有直连模式。
+
 **每位同学只需要自己的 CPR API Key。** 在 Windows、macOS、Linux **本机**运行安装命令；不用 SSH 到 ywl，不必手工写 `config.toml`，不用自己安装 Node.js/npm。
 
 > **版本状态：v0.1.1 修复候选**。安装器自动选择最新稳定 Release；没有稳定版时选择最新预发布版本，所有载荷锁定在同一 tag。仅收到 `[READY]` 且安装程序成功退出，才能认定**自己这台机器**的模型、凭据和真实工具调用已通过。管理员验证范围见 [测试状态](#测试状态)。

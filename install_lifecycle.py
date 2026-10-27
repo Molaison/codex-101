@@ -24,7 +24,7 @@ import urllib.error
 import urllib.request
 
 
-PAYLOAD = ("codex_provider.py", "model_catalog.json", "install_lifecycle.py")
+PAYLOAD = ("codex_provider.py", "model_catalog.json", "install_lifecycle.py", "magpie_support.py")
 RELEASE_PATTERN = re.compile(r"v\d+\.\d+\.\d+")
 DISPATCHER = '''#!/usr/bin/env python3
 # codex-101 managed dispatch; do not edit in place.

@@ -35,6 +35,7 @@ import urllib.request
 VERSION = "0.2.0"
 LAB_CPR_URL = "https://cpr.molaisonz.dpdns.org/v1"
 LAB_CPR_MODEL = "chatgpt-web/gpt-6-tools-temp"
+MAGPIE_GATEWAY_URL = "http://127.0.0.1:3425/v1"
 LAB_HTTP_RETRIES = 8
 LAB_STREAM_RETRIES = 12
 LAB_STREAM_IDLE_TIMEOUT_MS = 900000
@@ -425,6 +426,116 @@ def provider_settings():
             providers.setdefault(name, {}).update(block)
     settings["model_providers"] = providers
     return settings
+
+
+def backup_config(prefix="config-"):
+    """Keep an untouched config copy before another tool may rewrite it."""
+    path = config_path()
+    if not path.is_file():
+        return None
+    backups = state_directory() / "backups"
+    secure_directory(backups)
+    backup = backups / (prefix + secrets.token_hex(6) + ".toml")
+    shutil.copyfile(path, backup)
+    backup.chmod(0o600)
+    return backup
+
+
+def load_magpie_support():
+    """Also support Windows embedded Python, whose ._pth excludes this directory."""
+    try:
+        import magpie_support
+        return magpie_support
+    except ModuleNotFoundError as error:
+        if error.name != "magpie_support":
+            raise
+    import importlib.util
+    path = Path(__file__).resolve().with_name("magpie_support.py")
+    spec = importlib.util.spec_from_file_location("magpie_support", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def magpie_gateway(raw_model, settings=None):
+    """Validate Magpie's generated loopback route and return its raw provider block."""
+    settings = provider_settings() if settings is None else settings
+    provider_id = settings.get("model_provider")
+    selected = settings.get("model")
+    expected = "cpr/" + raw_model
+    if selected != expected:
+        raise ValueError("Magpie 生成的 model 不是 cpr/%s；未改写配置。" % raw_model)
+    if not isinstance(provider_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", provider_id):
+        raise ValueError("Magpie 未生成可复用的 model_provider ID；未改写配置。")
+    providers = settings.get("model_providers")
+    provider = providers.get(provider_id) if isinstance(providers, dict) else None
+    if not isinstance(provider, dict):
+        raise ValueError("Magpie 生成的 provider 不存在；未改写配置。")
+    base_url = provider.get("base_url")
+    try:
+        normalized = normalize_url(base_url) if isinstance(base_url, str) else None
+    except ValueError:
+        normalized = None
+    if normalized != MAGPIE_GATEWAY_URL:
+        raise ValueError("Magpie gateway 不是受支持的本地 endpoint %s；未改写配置。"
+                         % MAGPIE_GATEWAY_URL)
+    return provider_id, provider, expected
+
+
+def magpie_catalog(catalog):
+    """Copy the checked CPR catalog to a private, qualified-only Magpie namespace."""
+    source = json.loads(Path(catalog).read_text(encoding="utf-8"))
+    models = source.get("models") if isinstance(source, dict) else None
+    if not isinstance(models, list) or any(not isinstance(item, dict)
+                                           or not isinstance(item.get("slug"), str)
+                                           or not item["slug"] for item in models):
+        raise ValueError("CPR catalog 无法生成 Magpie 模型目录；未改写配置。")
+    raw_models = [item["slug"] for item in models]
+    for item in models:
+        item["slug"] = "cpr/" + item["slug"]
+    if len({item["slug"] for item in models}) != len(models):
+        raise ValueError("CPR catalog 加 cpr/ 前缀后出现重复模型；未改写配置。")
+    target = state_directory() / "catalogs" / "magpie-cpr-models-v1.json"
+    secure_directory(target.parent)
+    private_json(target, source)
+    target.chmod(0o600)
+    return raw_models, target
+
+
+def restore_config_if_unchanged(backup, edited, existed):
+    """Restore only the exact config snapshot Magpie left after its step."""
+    path = config_path()
+    if not existed and not path.exists() and not path.is_symlink():
+        return True
+    if existed and backup is not None and backup.is_file() and path.is_file() and not path.is_symlink():
+        try:
+            if path.read_bytes() == backup.read_bytes():
+                return True  # The module already restored the original file.
+        except OSError:
+            pass
+    if edited is None or path.is_symlink() or not path.is_file():
+        return False
+    try:
+        if path.read_bytes() != edited:
+            return False
+        if not existed:
+            path.unlink()
+            return True
+        if backup is None or not backup.is_file():
+            return False
+        pending = path.with_name(".config-restore-" + secrets.token_hex(6))
+        try:
+            shutil.copyfile(backup, pending)
+            pending.chmod(0o600)
+            if path.is_symlink() or path.read_bytes() != edited:
+                return False
+            os.replace(pending, path)
+        finally:
+            if pending.exists():
+                pending.unlink()
+        return True
+    except OSError:
+        return False
 
 
 def config_provider(name, settings=None, include_key=True):
@@ -1103,7 +1214,8 @@ def lab_client_path(binary):
 
 def migrate_sqlite_when_idle(source, dest):
     """Keep old DB/WAL/SHM untouched; only publish a complete stopped-writer copy."""
-    if source != dest and (source / "state_5.sqlite").is_file():
+    databases = sorted(source.glob("*.sqlite")) if source.is_dir() else []
+    if source != dest and databases:
         if dest.exists() and any(dest.iterdir()):
             raise ValueError("SQLite 新旧目录均有数据；未覆盖或混库。请维护者确定使用哪一份。")
         # Do not migrate while any of this user's Codex processes might write WAL.
@@ -1121,20 +1233,27 @@ def migrate_sqlite_when_idle(source, dest):
             if running:
                 raise ValueError("发现当前用户仍有 Codex 进程；未迁移 SQLite。结束任务后重跑同一安装命令。")
         ensure_idle()
+        databases = sorted(source.glob("*.sqlite"))
         staging = Path(tempfile.mkdtemp(prefix=".codex-sqlite-", dir=str(dest.parent)))
         try:
             originals = {}
-            for db in ("state_5.sqlite", "memories_1.sqlite", "goals_1.sqlite", "queue_1.sqlite"):
+            inventory = []
+            for database in databases:
                 for suffix in ("", "-wal", "-shm"):
-                    f = source / (db + suffix)
-                    if f.is_file():
-                        originals[f] = (f.stat().st_size, f.stat().st_mtime_ns)
-                        target = staging / f.name
-                        shutil.copy2(f, target)
-                        target.chmod(0o600)
+                    candidate = Path(str(database) + suffix)
+                    if candidate.is_file() and candidate not in inventory:
+                        inventory.append(candidate)
+            for f in inventory:
+                originals[f] = (f.stat().st_size, f.stat().st_mtime_ns)
+                target = staging / f.name
+                shutil.copy2(f, target)
+                target.chmod(0o600)
             ensure_idle()
-            if any(not f.exists() or (f.stat().st_size, f.stat().st_mtime_ns) != stat
-                   for f, stat in originals.items()):
+            current_files = {Path(str(db) + suffix) for db in source.glob("*.sqlite")
+                             for suffix in ("", "-wal", "-shm") if Path(str(db) + suffix).is_file()}
+            if current_files != set(originals) or any(
+                    not f.exists() or (f.stat().st_size, f.stat().st_mtime_ns) != stat
+                    for f, stat in originals.items()):
                 raise ValueError("SQLite 源文件在迁移期间发生变化；未切换目录。")
             if dest.is_dir() and not any(dest.iterdir()):
                 dest.rmdir()
@@ -1165,7 +1284,8 @@ def lab_sqlite_home():
     return str(dest)
 
 
-def native_configure(binary, connection, model, lab_sqlite=None):
+def native_configure(binary, connection, model, lab_sqlite=None,
+                     gateway_provider=None, gateway_provider_id=None):
     catalog_models = json.loads(Path(connection["catalog_file"]).read_text(encoding="utf-8"))["models"]
     expected = {item["slug"] for item in catalog_models
                 if item.get("visibility") == "list" and item.get("supported_in_api", True)}
@@ -1177,35 +1297,50 @@ def native_configure(binary, connection, model, lab_sqlite=None):
             cursor = result.get("nextCursor")
             if not cursor:
                 return menu
-    keys = state_directory() / "keys"
-    secure_directory(keys)
-    # Old thread routes may still hold the old auth command. Never rotate its file.
-    credential = keys / (connection["generation"] + ".key")
-    descriptor, temporary = tempfile.mkstemp(prefix=".key-", dir=str(keys))
-    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-        output.write(resolved_key(connection) + "\n")
-    os.replace(temporary, credential)
-    auth = ({"timeout_ms": 60000, "refresh_interval_ms": 300000, "cwd": os.getcwd(),
-             "command": connection["auth_command"][0], "args": connection["auth_command"][1:],
-             **connection.get("auth_options", {})}
-            if connection.get("auth_command") else
-            {"command": sys.executable, "timeout_ms": 5000, "refresh_interval_ms": 300000,
-             "cwd": str(state_directory()),
-             "args": ["-c", "from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text().strip())", str(credential)]})
-    provider = {"name": "Connected API", "base_url": connection["url"], "wire_api": "responses", "auth": auth,
-                "request_max_retries": LAB_HTTP_RETRIES if lab_sqlite else 0,
-                "stream_max_retries": LAB_STREAM_RETRIES if lab_sqlite else 0}
-    if lab_sqlite:
-        provider["supports_websockets"] = False
-        provider["stream_idle_timeout_ms"] = LAB_STREAM_IDLE_TIMEOUT_MS
+    gateway_mode = gateway_provider is not None or gateway_provider_id is not None
+    if gateway_mode:
+        if not isinstance(gateway_provider, dict) or not isinstance(gateway_provider_id, str) \
+                or not re.fullmatch(r"[A-Za-z0-9_-]+", gateway_provider_id):
+            raise ValueError("Magpie gateway provider 信息不完整；未改写配置。")
+        # The localhost provider keeps Magpie's own auth. Never substitute the CPR key.
+        provider = dict(gateway_provider)
+        provider.update(request_max_retries=LAB_HTTP_RETRIES,
+                        stream_max_retries=LAB_STREAM_RETRIES,
+                        supports_websockets=False,
+                        stream_idle_timeout_ms=LAB_STREAM_IDLE_TIMEOUT_MS)
+        provider_name = gateway_provider_id
+    else:
+        keys = state_directory() / "keys"
+        secure_directory(keys)
+        # Old thread routes may still hold the old auth command. Never rotate its file.
+        credential = keys / (connection["generation"] + ".key")
+        descriptor, temporary = tempfile.mkstemp(prefix=".key-", dir=str(keys))
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write(resolved_key(connection) + "\n")
+        os.replace(temporary, credential)
+        auth = ({"timeout_ms": 60000, "refresh_interval_ms": 300000, "cwd": os.getcwd(),
+                 "command": connection["auth_command"][0], "args": connection["auth_command"][1:],
+                 **connection.get("auth_options", {})}
+                if connection.get("auth_command") else
+                {"command": sys.executable, "timeout_ms": 5000, "refresh_interval_ms": 300000,
+                 "cwd": str(state_directory()),
+                 "args": ["-c", "from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text().strip())", str(credential)]})
+        provider = {"name": "Connected API", "base_url": connection["url"], "wire_api": "responses", "auth": auth,
+                    "request_max_retries": LAB_HTTP_RETRIES if lab_sqlite else 0,
+                    "stream_max_retries": LAB_STREAM_RETRIES if lab_sqlite else 0}
+        if lab_sqlite:
+            provider["supports_websockets"] = False
+            provider["stream_idle_timeout_ms"] = LAB_STREAM_IDLE_TIMEOUT_MS
+        provider_name = "provider_connect"
     reload_path = state_directory() / "native-reload.json"
     pending = json.loads(reload_path.read_text()) if reload_path.exists() else None
     with NativeRPC(binary) as rpc:
         before = rpc.call("config/read", {"includeLayers": True})
         config = before["config"]
-        targets = {"model_provider": "provider_connect", "model": model,
+        targets = {"model_provider": provider_name, "model": model,
                    "model_catalog_json": connection["catalog_file"],
-                   "model_providers.provider_connect": provider, "features.api_key_model_discovery": False}
+                   "model_providers." + provider_name: provider,
+                   "features.api_key_model_discovery": False}
         if lab_sqlite:
             targets.update({"sqlite_home": lab_sqlite,
                             "sandbox_mode": "danger-full-access", "approval_policy": "never",
@@ -1250,9 +1385,9 @@ def native_configure(binary, connection, model, lab_sqlite=None):
             if result["status"] != "ok":
                 raise ValueError("用户配置被更高优先级配置覆盖；请 server owner 调整启动配置，未停止已有 server。")
         after = rpc.call("config/read", {"includeLayers": False})["config"]
-        if (after.get("model_provider") != "provider_connect" or after.get("model") != model
+        if (after.get("model_provider") != provider_name or after.get("model") != model
                 or after.get("model_catalog_json") != connection["catalog_file"]
-                or without_defaults(after.get("model_providers", {}).get("provider_connect")) != without_defaults(provider)):
+                or without_defaults(after.get("model_providers", {}).get(provider_name)) != without_defaults(provider)):
             raise ValueError("Codex server 未使用新配置；请原 owner 更新启动设置，未报 READY 或自动重启。")
         live = rpc.live
         identity = rpc.identity
@@ -1416,7 +1551,8 @@ def check_problem(message):
 
 def check_result(directory):
     record = json.loads((directory / "state.json").read_text(encoding="utf-8"))
-    identity = {"model": record["model"], "endpoint": record.get("connection", {}).get("url")}
+    identity = {"model": record["model"], "endpoint": record.get("connection", {}).get("url"),
+                "transport": record.get("connection", {}).get("transport")}
     events = []
     output = directory / "events.jsonl"
     if output.exists():
@@ -1494,6 +1630,7 @@ def model_check(binary, connection, catalog, model, retry=False, wait_seconds=60
         if result["status"] == "running" or not retry:
             if (previous["url"] != connection["url"] or result["model"] != model
                     or previous.get("generation") != connection.get("generation")
+                    or previous.get("transport") != connection.get("transport")
                     or previous.get("binary") != binary or previous.get("native", False) != native):
                 return {"status": "failed", "code": "CHECK_CONNECTION_CHANGED",
                         "endpoint": connection["url"], "previous_endpoint": previous["url"],
@@ -1541,11 +1678,14 @@ def model_check(binary, connection, catalog, model, retry=False, wait_seconds=60
             private_json(directory / "state.json", {"status": "intent", "created_at": time.time(), "binary": binary,
                          "model": model, "marker": marker, "marker_path": str(target), "arguments": arguments,
                          "native": native, "connection": {"url": connection["url"], "default_model": model,
-                                        "direct": connection.get("direct", False)}})
+                                        "direct": connection.get("direct", False),
+                                        "transport": connection.get("transport")}})
             shutil.copyfile(catalog, directory / "models.json")
             (directory / "models.json").chmod(0o600)
             private_json(active, {"directory": str(directory), "url": connection["url"],
-                                  "generation": connection.get("generation"), "binary": binary, "native": native})
+                                  "generation": connection.get("generation"),
+                                  "transport": connection.get("transport"),
+                                  "binary": binary, "native": native})
             options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS} if os.name == "nt" else {"start_new_session": True}
             worker = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_check-worker", str(directory)],
                              env=dict(os.environ, CODEX_PROVIDER_API_KEY=resolved_key(connection)),
@@ -1595,6 +1735,7 @@ def doctor(arguments, prepared=None):
             report["last_check"] = check_result(Path(current["directory"]))
             report["last_check"]["same_connection"] = (current["url"] == connection["url"]
                 and current.get("generation") == connection.get("generation") and current.get("binary") == binary
+                and current.get("transport") == connection.get("transport")
                 and report["last_check"].get("model") == model)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         code, hint = check_problem(str(error))
@@ -1686,7 +1827,11 @@ def native_setup(arguments):
     parser.add_argument("--skip-check", action="store_true", help="只配置，返回2/NOT_VERIFIED，不报成功")
     parser.add_argument("--check", action="store_true", help="默认已执行真实只读工具自检")
     parser.add_argument("--lab", "--lab-ywl", action="store_true", help="跨平台实验室预设：只输入 Key、官方客户端、本地 SQLite、V1-only、全权限、SSE")
+    parser.add_argument("--magpie", action="store_true",
+                        help="实验室预设，并自动安装和配置 Magpie 本地 gateway 接入 CPR")
     args = parser.parse_args(arguments)
+    if args.magpie:
+        args.lab = True
     if args.skip_check and args.check:
         parser.error("--skip-check 与 --check 不能同时使用")
     if args.upgrade_codex and not args.lab:
@@ -1706,14 +1851,15 @@ def native_setup(arguments):
         # A known terminal upstream failure cannot be cured by reinstalling the
         # client. Require an intentional retry or an explicit connection/model change.
         expected_url = LAB_CPR_URL if args.lab else args.url or (previous or {}).get("url")
-        expected_model = args.model or (LAB_CPR_MODEL if args.lab else (previous or {}).get("default_model"))
+        raw_expected = args.model or (LAB_CPR_MODEL if args.lab else (previous or {}).get("default_model"))
+        expected_model = "cpr/" + raw_expected if args.magpie and raw_expected else raw_expected
         if (result["status"] == "failed" and result["code"] == "UPSTREAM_READINESS"
                 and result.get("endpoint") == expected_url and result.get("model") == expected_model
                 and not (args.repair or args.reconfigure or args.upgrade_codex or args.skip_check or args.catalog_file
                          or args.provider or args.restart_if_idle)):
             result = native_check_report(result)
             result["hint"] += " 已复用上次失败记录，未重新下载 Codex 或提交模型请求；上游恢复后加 --repair 显式重测。"
-            if args.lab and expected_model == LAB_CPR_MODEL:
+            if args.lab and not args.magpie and expected_model == LAB_CPR_MODEL:
                 result["hint"] += (" 若愿意让 Web 账号保存聊天历史，可以显式改用"
                                    " --lab --model chatgpt-web/gpt-6-tools-persist；"
                                    "是否可用仍须对当前 HTTPS 地址完成真实自检。")
@@ -1752,9 +1898,18 @@ def native_setup(arguments):
                                if (previous or {}).get("url") == connection["url"] else None))
     model, _ = select_model(connection, catalog, requested)
     connection.update(default_model=model, integration="native", api_key=resolved_key(connection), client_version=client_version(binary))
+    if args.magpie:
+        connection["transport"] = "magpie"
+        connection.pop("gateway_provider_id", None)
+        connection.pop("gateway_url", None)
+    else:
+        connection.pop("transport", None)
+        connection.pop("gateway_provider_id", None)
+        connection.pop("gateway_url", None)
     repaired_catalog = connection.pop("catalog_repaired", False)
     same = previous and not repaired_catalog and all(previous.get(key) == connection.get(key)
-                            for key in ("url", "api_key", "auth_command", "auth_options", "default_model", "catalog_file", "integration", "client_version"))
+                            for key in ("url", "api_key", "auth_command", "auth_options", "default_model",
+                                        "catalog_file", "integration", "client_version", "transport"))
     connection["generation"] = previous.get("generation") if same and previous.get("generation") else secrets.token_hex(12)
     preflight = native_preflight(connection, model)
     preflight.update(endpoint=connection["url"], model=model)
@@ -1762,10 +1917,63 @@ def native_setup(arguments):
         private_json(state_directory() / "native-installation.json", preflight)
         print(json.dumps(preflight, ensure_ascii=False))
         return 1
-    integration = native_configure(binary, connection, model, lab_sqlite=lab_sqlite)
+    gateway_provider = gateway_provider_id = None
+    check_model = model
+    magpie_backup = None
+    native_connection = connection
+    if args.magpie:
+        # Magpie rewrites config.toml itself, so back up the true pre-Magpie file.
+        config_existed = config_path().is_file()
+        magpie_backup = backup_config("config-magpie-")
+        edited_config = None
+        try:
+            raw_models = [item["slug"] for item in
+                          json.loads(Path(catalog).read_text(encoding="utf-8"))["models"]]
+            magpie_support = load_magpie_support()
+            magpie_support.prepare(resolved_key(connection), raw_models, model)
+            if config_path().is_file():
+                edited_config = config_path().read_bytes()
+            gateway_provider_id, gateway_provider, check_model = magpie_gateway(model)
+            _, qualified_catalog = magpie_catalog(catalog)
+        except Exception:
+            restored = restore_config_if_unchanged(magpie_backup, edited_config, config_existed)
+            if restored:
+                config_state = "已安全恢复原 config"
+            elif magpie_backup is not None:
+                config_state = "原 config 备份已保留，但无法确认可安全恢复"
+            else:
+                config_state = "未确认原 config 可安全恢复"
+            failure = {
+                "integration": "native", "installer_version": VERSION,
+                "client_version": client_version(binary), "endpoint": connection["url"],
+                "transport": "magpie", "gateway": MAGPIE_GATEWAY_URL,
+                "raw_model": model, "magpie_config_backup": str(magpie_backup) if magpie_backup else None,
+                "config_restored": restored, "status": "failed", "code": "MAGPIE_SETUP",
+                "hint": "Magpie 网关准备或配置验证失败；%s，未报告成功。Magpie 安装/gateway 状态需检查；原始日志/Key 未输出。"
+                        % config_state,
+            }
+            private_json(state_directory() / "native-installation.json", failure)
+            print(json.dumps(failure, ensure_ascii=False))
+            return 1
+        connection.update(gateway_provider_id=gateway_provider_id, gateway_url=MAGPIE_GATEWAY_URL)
+        catalog = qualified_catalog
+        model = check_model
+        # The saved connection keeps the raw CPR catalog. Only this native write
+        # uses the qualified catalog, so a rerun cannot prefix slugs twice.
+        native_connection = dict(connection, catalog_file=str(qualified_catalog))
+    if args.magpie:
+        integration = native_configure(binary, native_connection, model, lab_sqlite=lab_sqlite,
+                                       gateway_provider=gateway_provider,
+                                       gateway_provider_id=gateway_provider_id)
+    else:
+        integration = native_configure(binary, native_connection, model, lab_sqlite=lab_sqlite)
     private_json(state_directory() / "connection.json", connection)
     report = {"integration": "native", "installer_version": VERSION, "client_version": client_version(binary),
               "endpoint": connection["url"], "model": model, **integration}
+    if args.magpie:
+        report.update(transport="magpie", gateway=MAGPIE_GATEWAY_URL,
+                      gateway_provider=gateway_provider_id, raw_model=connection["default_model"],
+                      magpie_config_backup=str(magpie_backup) if magpie_backup else None)
     if integration["restart_required"]:
         restarted, code, hint = native_restart(binary, integration, confirmed=args.restart_if_idle or args.lab)
         if not restarted:
@@ -1773,7 +1981,12 @@ def native_setup(arguments):
             private_json(state_directory() / "native-installation.json", report)
             print(json.dumps(report, ensure_ascii=False))
             return 2
-        integration = native_configure(binary, connection, model, lab_sqlite=lab_sqlite)
+        if args.magpie:
+            integration = native_configure(binary, native_connection, model, lab_sqlite=lab_sqlite,
+                                           gateway_provider=gateway_provider,
+                                           gateway_provider_id=gateway_provider_id)
+        else:
+            integration = native_configure(binary, native_connection, model, lab_sqlite=lab_sqlite)
         report.update(integration, server_restarted=True)
         if integration["restart_required"]:
             report.update(status="not_verified", code="SERVER_RESTART_REQUIRED", hint="重启后配置仍未刷新；请原 server owner 检查启动配置。未提交自检。")
