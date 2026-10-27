@@ -96,14 +96,23 @@ class MergeTests(unittest.TestCase):
             self.assertEqual(by_id["cpr"]["key"], "REAL-SENTINEL")
             self.assertEqual(loaded["order"], ["other"])
             self.assertEqual(loaded["unknown"], {"kept": True})
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_atomic_write_without_fchmod_keeps_private_mode(self):
         with tempfile.TemporaryDirectory(prefix="magpie-support-no-fchmod-") as temporary:
             path = Path(temporary) / "magpie" / "providers.json"
+            fallback_chmod = os.chmod
             with mock.patch.object(magpie.os, "fchmod", None, create=True):
-                magpie._atomic_write_json(path, {"providers": [{"id": "other", "key": "secret"}]})
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                with mock.patch.object(
+                    magpie.os, "chmod", wraps=fallback_chmod
+                ) as chmod:
+                    magpie._atomic_write_json(
+                        path, {"providers": [{"id": "other", "key": "secret"}]}
+                    )
+            chmod.assert_called_once_with(mock.ANY, 0o600)
+            if os.name != "nt":
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_merge_rejects_cpr_bound_elsewhere(self):
         with tempfile.TemporaryDirectory(prefix="magpie-support-reject-") as temporary:
@@ -171,7 +180,7 @@ class RuntimeTests(unittest.TestCase):
 
         with mock.patch.object(magpie, "_run", side_effect=fake_run):
             self.assertTrue(magpie._gateway_healthy(Path("/fake/magpie"), {"MAGPIE_ADDR": "127.0.0.1:3425"}))
-        self.assertEqual(calls, [[ "/fake/magpie", "healthcheck" ]])
+        self.assertEqual(calls, [[str(Path("/fake/magpie")), "healthcheck"]])
 
     def test_stopped_daemon_is_started_not_restarted(self):
         commands = []
@@ -417,7 +426,7 @@ class WindowsAssetTests(unittest.TestCase):
             startup = appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
             startup.mkdir(parents=True)
             target = startup / "codex101-magpie.cmd"
-            target.write_text("@echo unrelated\r\n", encoding="utf-8")
+            target.write_bytes(b"@echo unrelated\r\n")
             paths = {
                 "home": root / "home",
                 "xdg_config_home": root / "home" / ".config",
