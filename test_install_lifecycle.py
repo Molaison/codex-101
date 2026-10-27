@@ -63,6 +63,9 @@ if __name__ == "__main__":
         (root/"checks"/"current.json").write_text(json.dumps({{"directory":str(directory),"url":"https://fixture.invalid/v1","native":True}}))
         sys.exit(2)
     if os.environ.get("FIXTURE_CRASH_BEFORE_REPORT"): sys.exit(1)
+    if os.environ.get("FIXTURE_CONFIGURED"):
+        (root/"native-installation.json").write_text(json.dumps({{"status":"configured","code":"CONFIGURED"}}))
+        sys.exit(3)
     if os.environ.get("FIXTURE_SERVER_BUSY"):
         (root/"native-installation.json").write_text(json.dumps({{"status":"not_verified","code":"SERVER_BUSY"}}))
         sys.exit(2)
@@ -273,6 +276,21 @@ if __name__ == "__main__":
         self.assertEqual(self.config.read_bytes(), before)
         self.assertEqual((self.root / "client.json").read_bytes(), client)
         self.assertEqual(lifecycle.read_json(self.root / "active.json")["active"], "v0.2.0")
+
+    def test_repeated_configured_report_stays_configured(self):
+        source = self.payload("v0.2.0")
+        with mock.patch.dict(os.environ, {"FIXTURE_CONFIGURED": "1"}):
+            self.assertEqual(self.install("v0.2.0", source), 3)
+            self.assertEqual(lifecycle.read_json(self.root / "active.json")["status"], "CONFIGURED")
+            # The provider writes a byte-identical report on the retry; that is
+            # still a configured install, not a stale failure to roll back.
+            self.assertEqual(self.install("v0.2.0", source), 3)
+        self.assertEqual(lifecycle.read_json(self.root / "active.json")["status"], "CONFIGURED")
+        self.assertFalse((self.root / "pending.json").exists())
+        self.assertEqual(lifecycle.read_json(self.root / "active.json")["active"], "v0.2.0")
+        stages = {lifecycle.read_json(path)["stage"]
+                  for path in (self.root / "transactions").glob("*/journal.json")}
+        self.assertNotIn("ROLLED_BACK_LOCAL", stages)
 
     def test_failed_setup_compensation_survives_interruption(self):
         self.assertEqual(self.install("v0.2.0"), 0)

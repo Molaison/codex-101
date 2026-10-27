@@ -299,13 +299,49 @@ def restore_file(tx, name, record):
         Path(record["path"]).unlink(missing_ok=True)
 
 
+def process_alive(pid):
+    """True/False says whether the recorded check process still runs; None means unknown."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if pid <= 0:
+        return None
+    if os.name == "nt":
+        try:
+            output = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid, "/FO", "CSV", "/NH"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    universal_newlines=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return str(pid) in (output.stdout or "")
+    try:
+        os.kill(pid, 0)  # Probe existence only; no signal is delivered.
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+    return True
+
+
 def running_check(root):
     pointer = connection_state_root() / "checks" / "current.json"
     if pointer.is_file():
         try:
             path = Path(read_json(pointer)["directory"]) / "state.json"
             # Missing state cannot establish that a previously submitted turn ended.
-            return not path.is_file() or read_json(path).get("status") not in ("terminal", "worker_error")
+            if not path.is_file():
+                return True
+            record = read_json(path)
+            if record.get("status") in ("terminal", "worker_error"):
+                return False
+            pids = [record.get("worker_pid"), record.get("client_pid")]
+            if pids and all(process_alive(pid) is False for pid in pids):
+                # 进程已消失却没有终态：记录现场但不能永久阻塞后续安装。
+                return False
+            return True
         except (OSError, ValueError, KeyError):
             return True
     return False
@@ -394,6 +430,9 @@ def activate_transaction(root, tx, record):
     (root / "pending.json").unlink(missing_ok=True)
     if record["new_state"]["status"] == "READY":
         print("[READY] 已验证 codex-101 %s；旧版仍保留，可离线回滚。" % record["to"])
+    elif record["new_state"]["status"] == "CONFIGURED":
+        print("[CONFIGURED] 已保存 codex-101 %s 的可用配置与启动器；真实自检未执行或未通过，未声明 READY。"
+              % record["to"], file=sys.stderr)
     else:
         print("[NOT_READY] 已保存本地组件；服务验收状态为 %s。未自动回滚。" % record["new_state"]["status"], file=sys.stderr)
     return record["return_code"]
@@ -489,13 +528,18 @@ def setup_transaction(root, tx, record):
               read_json(report_file) if report_file.is_file() and digest(report_file) != record.get("report_before")
               else {})  # Never classify a new local failure using a stale upstream error.
     code = report.get("code")
+    if returncode == 3:
+        # Exit 3 already means "configured before verify": the provider saved
+        # connection, catalog and launcher. A byte-identical report is not a
+        # stale upstream error, so never treat it as a local failure.
+        code = "CONFIGURED"
     old = record["from"]
     if returncode == 2 and code in ("SERVER_BUSY", "SERVER_RESTART_REQUIRED", "SERVER_CHANGED", "SERVER_RESTART_FAILED"):
         record["stage"] = "PENDING_RESTART"
         private_json(journal, record)
         print("[PENDING_RESTART] 新配置需要原 Codex server 空闲后刷新；旧版本仍为 active。", file=sys.stderr)
         return 2
-    if returncode != 0 and code not in ("UPSTREAM_READINESS", "AUTH", "ACCESS", "BUSY", "NETWORK", "ENDPOINT", "MODEL_CHECK", "UPSTREAM_COMPAT"):
+    if returncode != 0 and code not in ("UPSTREAM_READINESS", "AUTH", "ACCESS", "BUSY", "NETWORK", "ENDPOINT", "MODEL_CHECK", "UPSTREAM_COMPAT", "CONFIGURED", "CHECK_ABANDONED"):
         if old and "--reconfigure" not in record["args"] and all(can_restore(item) for item in record["snapshots"].values()):
             record["stage"] = "COMPENSATING"
             record["return_code"] = returncode
@@ -506,7 +550,8 @@ def setup_transaction(root, tx, record):
         private_json(journal, record)
         print("[NOT_READY] 本地安装未通过；旧版本未切换，配置状态需人工核查。", file=sys.stderr)
         return returncode or 1
-    status = "READY" if returncode == 0 else "UPSTREAM_UNAVAILABLE" if code == "UPSTREAM_READINESS" else "NOT_VERIFIED"
+    status = ("READY" if returncode == 0 else "CONFIGURED" if code == "CONFIGURED"
+              else "UPSTREAM_UNAVAILABLE" if code == "UPSTREAM_READINESS" else "NOT_VERIFIED")
     repeated = old and old["active"] == record["to"]
     changed = any(item["before"] != item["after"] for item in record["snapshots"].values())
     codex_upgrade = "--upgrade-codex" in record["args"] and changed
@@ -741,7 +786,7 @@ def main():
     if args.command == "install":
         args.setup = rest[1:] if rest[:1] == ["--"] else rest
         result = install(args.root, args)
-        if result:
+        if result not in (0, 3):  # CONFIGURED 已给出下一步，不再追加恢复提示。
             print_next_step(args.root)
         return result
     if rest:

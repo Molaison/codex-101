@@ -581,7 +581,7 @@ class NativeIntegrationTests(unittest.TestCase):
                 mock.patch.object(connector, "native_preflight", return_value={"status": "network_ok"}), \
                 mock.patch.object(connector, "NativeRPC", self.rpc_factory()), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(connector.native_setup(["--url", self.connection["url"], "--skip-check"]), 2)
+            self.assertEqual(connector.native_setup(["--url", self.connection["url"], "--skip-check"]), 3)
             with mock.patch.dict(os.environ, {"CODEX_PROVIDER_API_KEY": "changed-private-fixture"}), \
                     mock.patch.object(connector, "model_check", return_value={"status": "passed", "code": "READY"}) as check:
                 self.assertEqual(connector.native_setup(["--url", self.connection["url"]]), 0)
@@ -594,7 +594,7 @@ class NativeIntegrationTests(unittest.TestCase):
                 mock.patch.object(connector, "native_preflight", return_value={"status": "network_ok"}), \
                 mock.patch.object(connector, "NativeRPC", self.rpc_factory()), \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(connector.native_setup(["--url", self.connection["url"], "--skip-check"]), 2)
+            self.assertEqual(connector.native_setup(["--url", self.connection["url"], "--skip-check"]), 3)
             connector.private_json(connector.state_directory() / "checks/current.json", {"directory": str(self.home / "old-check")})
             with mock.patch.object(connector, "check_result", return_value={"status": "failed", "code": "UPSTREAM_COMPAT"}), \
                     mock.patch.object(connector, "model_check", return_value={"status": "passed", "code": "READY"}) as check:

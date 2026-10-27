@@ -1,9 +1,9 @@
 # Published at releases/latest/download/install.ps1; payloads stay on one release.
 # codex-provider-connect: user-local native Windows bootstrap; no administrator needed.
-param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHome, [switch]$Repair, [switch]$Reconfigure, [switch]$RestartIfIdle, [switch]$Lab)
+param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHome, [switch]$Repair, [switch]$Reconfigure, [switch]$RestartIfIdle, [switch]$Lab, [switch]$Check)
 
 & {
-    param([string]$ProviderUrl, [string]$ModelId, [string]$SelectedSqliteHome, [bool]$DoRepair, [bool]$DoReconfigure, [bool]$DoRestartIfIdle, [bool]$DoLab)
+    param([string]$ProviderUrl, [string]$ModelId, [string]$SelectedSqliteHome, [bool]$DoRepair, [bool]$DoReconfigure, [bool]$DoRestartIfIdle, [bool]$DoLab, [bool]$DoCheck)
     $ErrorActionPreference = 'Stop'
     try {
     $ProgressPreference = 'SilentlyContinue'
@@ -164,9 +164,16 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHom
         if ($DoRestartIfIdle) { $Arguments += '--restart-if-idle' }
         if ($DoLab) { $Arguments += '--lab' }
         elseif ($ProviderUrl) { $Arguments += @('--url', $ProviderUrl) }
+        if ($DoCheck) { $Arguments += '--check' }
         if ($ModelId) { $Arguments += @('--model', $ModelId) }
         if ($SelectedSqliteHome) { $Arguments += @('--sqlite-home', $SelectedSqliteHome) }
         & $Python -X utf8 $Helper @Arguments
+        if ($LASTEXITCODE -eq 3) {
+            # 已落地可用配置与启动器；真实自检未执行或未通过，不声明 READY。
+            Write-Host "`n[CONFIGURED] 已保存可用的连接、模型目录和启动器；真实自检未执行或未通过，未声明 READY。"
+            Write-Host "[NEXT] 需要服务端验收时，显式加 -Check 重跑同一安装命令。"
+            return
+        }
         if ($LASTEXITCODE -ne 0) { throw 'Setup is not verified. Re-run the same fixed download command; no READY was issued.' }
         if ($DoLab) {
             $LabBin = Join-Path $env:LOCALAPPDATA 'CodexLab\bin'
@@ -219,7 +226,8 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHom
         if ($DoRepair) { $Retry += ' -Repair' }
         if ($DoReconfigure) { $Retry += ' -Reconfigure' }
         if ($DoRestartIfIdle) { $Retry += ' -RestartIfIdle' }
+        if ($DoCheck) { $Retry += ' -Check' }
         Write-Host "[NEXT] 排除错误原因后重试：$Retry"
         throw
     }
-} $Url $Model $SqliteHome ([bool]$Repair) ([bool]$Reconfigure) ([bool]$RestartIfIdle) ([bool]$Lab)
+} $Url $Model $SqliteHome ([bool]$Repair) ([bool]$Reconfigure) ([bool]$RestartIfIdle) ([bool]$Lab) ([bool]$Check)

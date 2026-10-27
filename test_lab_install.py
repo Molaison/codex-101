@@ -73,15 +73,72 @@ class LabInstallTests(unittest.TestCase):
         with mock.patch.object(c, "state_directory", return_value=self.root), \
                 mock.patch.object(c, "saved_connection", return_value=None), \
                 mock.patch.object(c, "official_client", side_effect=RuntimeError("attempted a client install")) as install:
-            self.assertEqual(c.native_setup(["--lab"]), 1)
-            install.assert_not_called()
+            # --lab 默认只落地可用配置：历史失败记录不再拦住本次安装。
+            with self.assertRaisesRegex(RuntimeError, "attempted a client install"):
+                c.native_setup(["--lab"])
+            self.assertEqual(install.call_count, 1)
+            # 只有显式 --check 才复用失败记录，既不重装也不重投同一回合。
+            self.assertEqual(c.native_setup(["--lab", "--check"]), 1)
+            self.assertEqual(install.call_count, 1)
             report = json.loads((self.root / "native-installation.json").read_text())
             self.assertEqual(report["code"], "UPSTREAM_READINESS")
             self.assertIn("chatgpt-web/gpt-6-tools-persist", report["hint"])
-            for arguments in (["--lab", "--repair"], ["--lab", "--model", "chatgpt-web/gpt-6-tools-persist"]):
+            for arguments in (["--lab", "--check", "--repair"],
+                              ["--lab", "--check", "--model", "chatgpt-web/gpt-6-tools-persist"]):
                 with self.assertRaisesRegex(RuntimeError, "attempted a client install"):
                     c.native_setup(arguments)
-            self.assertEqual(install.call_count, 2)
+            self.assertEqual(install.call_count, 3)
+
+    def test_abandoned_worker_is_not_treated_as_a_running_turn(self):
+        directory = self.root / "abandoned"
+        directory.mkdir()
+        record = {"status": "running", "model": c.LAB_CPR_MODEL, "connection": {"url": c.LAB_CPR_URL},
+                  "marker": "CPC-test-END", "marker_path": str(directory / "marker.txt"),
+                  "worker_pid": 10 ** 9}
+        (directory / "state.json").write_text(json.dumps(record))
+        self.assertEqual(c.check_result(directory)["code"], "CHECK_ABANDONED")
+        # 仍有存活进程时保持原语义：查询同一回合，不重投。
+        record["worker_pid"] = os.getpid()
+        (directory / "state.json").write_text(json.dumps(record))
+        self.assertEqual(c.check_result(directory)["code"], "CHECK_PENDING")
+        self.assertTrue(c.process_alive(os.getpid()))
+        self.assertIsNone(c.process_alive(0))
+
+    def test_lab_model_absent_falls_back_to_an_authorized_model(self):
+        catalog = self.root / "models.json"
+        catalog.write_text(json.dumps({"models": [{"slug": c.LAB_CPR_MODEL, "visibility": "list"},
+                                                  {"slug": "gpt-5.6-luna", "visibility": "list"}]}))
+
+        def preflight(connection, model):
+            if model == c.LAB_CPR_MODEL:
+                return {"status": "failed", "code": "ACCESS", "reason": "model",
+                        "available": ["gpt-5.6-luna"]}
+            return {"status": "network_ok", "code": "ENDPOINT_OK"}
+
+        mocks = [
+            mock.patch.object(c, "state_directory", return_value=self.root),
+            mock.patch.object(c, "saved_connection", return_value=None),
+            mock.patch.object(c, "lab_sqlite_home", return_value=str(self.root / "sqlite")),
+            mock.patch.object(c, "official_client", return_value=["/verified/official/codex"]),
+            mock.patch.object(c, "configure",
+                              return_value=({"url": c.LAB_CPR_URL, "api_key": "test-key"}, catalog)),
+            mock.patch.object(c, "client_version", return_value="0.162.1"),
+            mock.patch.object(c, "native_preflight", side_effect=preflight),
+            mock.patch.object(c, "native_configure", return_value={"restart_required": False}),
+            mock.patch.object(c, "lab_client_path"),
+        ]
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for patch in mocks:
+                stack.enter_context(patch)
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            self.assertEqual(c.native_setup(["--lab"]), 3)
+        report = json.loads((self.root / "native-installation.json").read_text())
+        self.assertEqual(report["code"], "CONFIGURED")
+        self.assertEqual(report["model"], "gpt-5.6-luna")
+        self.assertEqual(json.loads((self.root / "connection.json").read_text())["default_model"],
+                         "gpt-5.6-luna")
 
     def test_check_results_identify_the_endpoint_actually_tested(self):
         endpoint = "http://127.0.0.1:18082/v1"
@@ -246,7 +303,13 @@ class LabInstallTests(unittest.TestCase):
             stack.enter_context(mock.patch.dict(os.environ, {"CODEX_PROVIDER_API_KEY": "unrelated-service-test-secret"}))
             for patch in mocks:
                 stack.enter_context(patch)
-            self.assertEqual(c.native_setup(["--lab"]), 0)
+            # 实验室预设默认只配置：先落地连接、模型目录与启动器，返回 3/CONFIGURED。
+            self.assertEqual(c.native_setup(["--lab"]), 3)
+            configured = json.loads((self.root / "native-installation.json").read_text())
+            self.assertEqual(configured["code"], "CONFIGURED")
+            self.assertNotEqual(configured["status"], "passed")
+            # 显式 --check 才执行真实只读工具自检。
+            self.assertEqual(c.native_setup(["--lab", "--check"]), 0)
         self.assertEqual(captured["binary"], ["/verified/official/codex"])
         self.assertEqual(captured["model"], c.LAB_CPR_MODEL)
         self.assertEqual(captured["sqlite"], "/tmp/example/codex-sqlite")

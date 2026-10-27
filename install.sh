@@ -7,7 +7,9 @@ install_failure() {
     local status="$1"
     shift
     local root="${CODEX_HOME:-$HOME/.codex}/provider-connect"
-    if (( status == 2 )); then
+    if (( status == 3 )); then
+        printf '\n[CONFIGURED] 已保存可用的连接、模型目录和启动器；真实自检未执行或未通过，未声明 READY。\n' >&2
+    elif (( status == 2 )); then
         printf '\n[PENDING] 安装尚未确认 READY；可能仍有原自检正在运行。\n' >&2
     else
         printf '\n[NOT_READY] 安装未完成（退出码 %s）；旧数据未被安装器清理。\n' "$status" >&2
@@ -20,6 +22,12 @@ install_failure() {
         if [[ -f "$root/pending.json" ]]; then
             printf '[NEXT] 恢复同一事务（不盲目重投）：python3 %q --root %q recover\n' "$root/install_lifecycle.py" "$root" >&2
         fi
+    fi
+    if (( status == 3 )); then
+        printf '[NEXT] 需要服务端验收时，显式加 --check 重跑同一安装命令：\n  (set -o pipefail; curl --http1.1 -fsSL --retry 2 https://raw.githubusercontent.com/Molaison/codex-101/main/install.sh | bash -s --' >&2
+        printf ' %q' "$@" >&2
+        printf ' --check)\n' >&2
+        return 0
     fi
     printf '[NEXT] 排除上述错误原因后，可重新执行完整安装命令：\n  (set -o pipefail; curl --http1.1 -fsSL --retry 2 https://raw.githubusercontent.com/Molaison/codex-101/main/install.sh | bash -s --' >&2
     printf ' %q' "$@" >&2

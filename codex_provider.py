@@ -1475,9 +1475,11 @@ def native_preflight(connection, model):
             if not isinstance(models, list):
                 return preflight_failure({"code": "NETWORK", "reason": "body",
                                           "detail": "HTTP %s 的 JSON 不含模型列表" % status}, endpoint, attempt)
-            available = {item.get("id", item.get("slug")) for item in models if isinstance(item, dict)}
+            available = {item.get("id") or item.get("slug") for item in models if isinstance(item, dict)}
+            available.discard(None)
             if model not in available:
                 return {"status": "failed", "code": "ACCESS", "reason": "model", "attempts": attempt,
+                        "available": sorted(available),
                         "hint": "该 key 的 /models 中没有所选模型；请维护者开放权限，或用 --model 选择已授权模型。未提交模型请求。"}
             return {"status": "network_ok", "code": "ENDPOINT_OK", "attempts": attempt,
                     "models_visible": len(available)}
@@ -1574,6 +1576,10 @@ def check_problem(message):
     if "personalization preflight exceeded its readiness deadline" in lower:
         return "UPSTREAM_READINESS", ("CPR 上游 ChatGPT personalization 预检连续超时；客户端重试不能修复服务端 readiness。"
                                       "请维护者检查 Web 桥接及账号会话，再恢复原自检；不要再次提交未终结回合。")
+    if "chatgpt model controls are unavailable" in lower or ("page.goto" in lower and "chatgpt.com" in lower):
+        return "UPSTREAM_READINESS", ("CPR 的 ChatGPT Web 桥接未就绪（模型控件不可用或页面加载超时）；"
+                                      "客户端重试不能修复服务端桥接。配置已保存，可先用已配置模型；"
+                                      "桥接恢复后运行 doctor --check --retry-check 验收。")
     if any(text in message for text in ("请先安装官方", "CODEX_BINARY", "无法识别 codex", "客户端不存在")):
         return "CLIENT", "客户端缺失或不可用；运行 repair。若显式设置了 CODEX_BINARY，请先修正该路径。"
     if "尚未配置" in message or "没有密钥" in message:
@@ -1591,6 +1597,33 @@ def check_problem(message):
     return "MODEL_CHECK", "真实工具自检未通过；用 doctor --json 查看脱敏结果，请维护者排查。"
 
 
+def process_alive(pid):
+    """返回 True/False；None 表示当前平台无法判定。"""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if pid <= 0:
+        return None
+    if os.name == "nt":
+        try:
+            output = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid, "/FO", "CSV", "/NH"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    universal_newlines=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return str(pid) in (output.stdout or "")
+    try:
+        os.kill(pid, 0)  # 只探测存在性，不发送信号。
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+    return True
+
+
 def check_result(directory):
     record = json.loads((directory / "state.json").read_text(encoding="utf-8"))
     identity = {"model": record["model"], "endpoint": record.get("connection", {}).get("url")}
@@ -1603,6 +1636,11 @@ def check_result(directory):
             except ValueError:
                 pass  # 正在写入的最后一行，下次继续读同一回合。
     if record["status"] not in ("terminal", "worker_error"):
+        pids = [pid for pid in (record.get("worker_pid"), record.get("client_pid")) if pid]
+        if pids and all(process_alive(pid) is False for pid in pids):
+            # 进程全部消失却没有终态：现场只保留证据，绝不为同一回合重投模型请求。
+            return {**identity, "status": "failed", "code": "CHECK_ABANDONED",
+                    "hint": "原自检进程已退出但没有写入终态；不重投同一回合，用 doctor --json 查看现场后运行 repair 重新自检。"}
         return {**identity, "status": "running", "code": "CHECK_PENDING",
                 "hint": "原自检仍在运行或终态待恢复；运行 doctor --check 查询同一回合，不要重投。"}
     final = directory / "final.txt"
@@ -1887,6 +1925,7 @@ def native_check_report(result):
     """Give native users the installer action, not an uninstalled legacy CLI."""
     hints = {
         "CHECK_PENDING": "原自检仍在运行或终态待恢复；重跑同一安装命令查询同一回合，不会重复提交。",
+        "CHECK_ABANDONED": "原自检进程已退出但没有写入终态；重跑同一安装命令可先落地配置，需要验收时加 --check 重新自检。",
         "CHECK_CONNECTION_CHANGED": "旧自检不能代表当前连接；重跑同一安装命令验证新连接。",
         "OUTPUT_MISMATCH": "工具读取成功，但模型未完整返回文件内容；重跑同一安装命令，仍失败请提供 native-installation.json。",
         "CLIENT": "客户端不可用；重跑同一安装命令。显式设置 CODEX_BINARY 时先修正该路径。",
@@ -1909,8 +1948,8 @@ def native_setup(arguments):
     parser.add_argument("--upgrade-codex", action="store_true", help="显式升级官方 Codex 到 npm stable latest；默认复用已验证版本")
     parser.add_argument("--repair", action="store_true", help="强制重做已通过的自检；失败终态默认重试，未终止时只恢复原回合")
     parser.add_argument("--restart-if-idle", action="store_true", help="明确允许需要刷新配置的本地 server 只在空闲时用官方命令重启")
-    parser.add_argument("--skip-check", action="store_true", help="只配置，返回2/NOT_VERIFIED，不报成功")
-    parser.add_argument("--check", action="store_true", help="默认已执行真实只读工具自检")
+    parser.add_argument("--skip-check", action="store_true", help="只配置并落地启动器，返回3/CONFIGURED，不报成功")
+    parser.add_argument("--check", action="store_true", help="显式要求真实只读工具自检；--lab 默认只配置")
     parser.add_argument("--lab", "--lab-ywl", action="store_true", help="跨平台实验室预设：只输入 Key、官方客户端、本地 SQLite、V1-only、全权限、SSE")
     parser.add_argument("--sqlite-home", metavar="ABSOLUTE_PATH",
                         help="显式选用该 SQLite 目录，不复制或合并另一份数据；仅适用于 --lab")
@@ -1921,8 +1960,11 @@ def native_setup(arguments):
         parser.error("--skip-check 与 --check 不能同时使用")
     if args.upgrade_codex and not args.lab:
         parser.error("--upgrade-codex 只用于 --lab 官方受管理副本；不升级用户原有的 Codex")
+    # 实验室预设默认"先落地可用配置"，真实自检只在显式 --check 时执行。
+    skip_check = args.skip_check or (args.lab and not args.check)
     previous = saved_connection()
     retry_failed = False
+    abandoned = False
     # Never rotate a credential or route underneath an unfinished accepted check.
     active = state_directory() / "checks/current.json"
     if active.exists():
@@ -1939,7 +1981,7 @@ def native_setup(arguments):
         expected_model = args.model or (LAB_CPR_MODEL if args.lab else (previous or {}).get("default_model"))
         if (result["status"] == "failed" and result["code"] == "UPSTREAM_READINESS"
                 and result.get("endpoint") == expected_url and result.get("model") == expected_model
-                and not (args.repair or args.reconfigure or args.upgrade_codex or args.skip_check or args.catalog_file
+                and not (args.repair or args.reconfigure or args.upgrade_codex or skip_check or args.catalog_file
                          or args.provider or args.restart_if_idle)):
             result = native_check_report(result)
             result["hint"] += " 已复用上次失败记录，未重新下载 Codex 或提交模型请求；上游恢复后加 --repair 显式重测。"
@@ -1950,7 +1992,9 @@ def native_setup(arguments):
             private_json(state_directory() / "native-installation.json", result)
             print(json.dumps(result, ensure_ascii=False))
             return 1
-        retry_failed = result["status"] == "failed"
+        # 进程已消失却没有终态：保留现场，不为同一回合重投模型请求。
+        abandoned = result["status"] == "failed" and result["code"] == "CHECK_ABANDONED"
+        retry_failed = result["status"] == "failed" and not abandoned
     lab_sqlite = lab_sqlite_home(args.sqlite_home) if args.lab else None
     binary = official_client(upgrade=args.upgrade_codex) if args.lab else native_client()
     options = []
@@ -1980,20 +2024,51 @@ def native_setup(arguments):
     requested = args.model or (LAB_CPR_MODEL if args.lab else
                               ((previous or {}).get("default_model")
                                if (previous or {}).get("url") == connection["url"] else None))
-    model, _ = select_model(connection, catalog, requested)
+    model, visible = select_model(connection, catalog, requested)
+    requested_model = model
     connection.update(default_model=model, integration="native", api_key=resolved_key(connection), client_version=client_version(binary))
     repaired_catalog = connection.pop("catalog_repaired", False)
-    same = previous and not repaired_catalog and all(previous.get(key) == connection.get(key)
-                            for key in ("url", "api_key", "auth_command", "auth_options", "default_model", "catalog_file", "integration", "client_version"))
-    connection["generation"] = previous.get("generation") if same and previous.get("generation") else secrets.token_hex(12)
+    generation_keys = ("url", "api_key", "auth_command", "auth_options", "default_model",
+                       "catalog_file", "integration", "client_version")
+    def unchanged_connection():
+        return bool(previous) and not repaired_catalog and all(
+            previous.get(key) == connection.get(key) for key in generation_keys)
+    def seal_generation():
+        connection["generation"] = (previous.get("generation")
+                                    if unchanged_connection() and previous.get("generation")
+                                    else secrets.token_hex(12))
+        return unchanged_connection()
+    same = seal_generation()
     preflight = native_preflight(connection, model)
+    fallback = None
+    # 实验室预设在未显式指定 --model 时，允许回落到该 key 实际授权的模型，先把配置落地。
+    if (preflight["status"] == "failed" and preflight.get("code") == "ACCESS"
+            and preflight.get("reason") == "model" and args.lab and not args.model):
+        offered = set(preflight.get("available") or ())
+        fallback = next((slug for slug in visible
+                         if slug in offered and not slug.startswith("chatgpt-web/")), None)
+    if fallback and fallback != model:
+        print("[MODEL_FALLBACK] 当前 key 的 /models 中没有 %s；改用已授权模型 %s。" % (model, fallback),
+              file=sys.stderr)
+        model = fallback
+        connection.update(default_model=model, api_key=resolved_key(connection),
+                          client_version=client_version(binary))
+        same = seal_generation()
+        preflight = native_preflight(connection, model)
+    model_absent = preflight.get("code") == "ACCESS" and preflight.get("reason") == "model"
     preflight.update(endpoint=connection["url"], model=model,
                      checked_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
-    if preflight["status"] == "failed":
+    if fallback:
+        preflight.update(requested_model=requested_model, model_fallback=True)
+    if preflight["status"] == "failed" and not model_absent:
         preflight["next"] = preflight_command_line(connection["url"], model)
         private_json(state_directory() / "native-installation.json", preflight)
         print(json.dumps(preflight, ensure_ascii=False))
         return 1
+    if model_absent:
+        # key 与 endpoint 本身可用，只是 /models 没有该模型：先保存连接，不伪装成功。
+        print("[MODEL_UNAVAILABLE] 当前 key 的 /models 中没有 %s；仍先保存可用配置。" % model,
+              file=sys.stderr)
     integration = native_configure(binary, connection, model, lab_sqlite=lab_sqlite)
     private_json(state_directory() / "connection.json", connection)
     report = {"integration": "native", "installer_version": VERSION, "client_version": client_version(binary),
@@ -2012,14 +2087,29 @@ def native_setup(arguments):
             private_json(state_directory() / "native-installation.json", report)
             print(json.dumps(report, ensure_ascii=False))
             return 2
-    if args.skip_check:
-        report.update(status="not_verified", code="NOT_VERIFIED", hint="原生配置和菜单已更新；未进行真实调用。")
+    if skip_check or model_absent:
+        # 先把可用的东西全部落地：连接、模型目录、启动器；不声明 READY。
+        if args.lab:
+            lab_client_path(binary)
+        else:
+            native_path(binary)
+        if model_absent:
+            hint = ("连接和启动器已保存，但当前 key 的 /models 中没有 %s，未提交模型请求；"
+                    "换用已授权模型（--model）后重跑，或用 doctor --check 查询。" % model)
+        else:
+            hint = "连接、模型目录和启动器已落地；未执行真实只读工具自检，也未经服务端验收（未声明 READY）。"
+        if fallback:
+            hint += " 已将默认模型从 %s 回落到该 key 已授权的 %s。" % (requested_model, model)
+        report.update(status="configured", code="CONFIGURED", hint=hint)
+        if model_absent:
+            report["model_unavailable"] = {"requested": requested_model, "selected": model,
+                                           "available": preflight.get("available", [])}
         private_json(state_directory() / "native-installation.json", report)
         print(json.dumps(report, ensure_ascii=False))
-        return 2
+        return 3
     print("正在通过已保存的原生 codex 配置执行只读工具自检，最多等待%d分钟；超时重跑同一安装命令查询，不重投。" % (20 if args.lab else 10), file=sys.stderr)
     report.update(native_check_report(model_check(binary, connection, catalog, model,
-                                                 retry=args.repair or retry_failed or not same, native=True,
+                                                 retry=args.repair or retry_failed or abandoned or not same, native=True,
                                                  wait_seconds=1200 if args.lab else 600)))
     private_json(state_directory() / "native-installation.json", report)
     if report["status"] == "passed":
