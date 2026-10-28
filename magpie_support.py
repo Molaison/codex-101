@@ -798,6 +798,10 @@ def _node_mode(paths: Mapping[str, Path]) -> bool:
     return override == "1" if override else _filesystem_type(paths["home"]) == "lustre"
 
 
+def node_mode() -> bool:
+    return _node_mode(_runtime_layout())
+
+
 def _private_directory(path: Path) -> Path:
     # Validate the complete chain below /tmp; do not follow a planted parent.
     if str(path).startswith("/tmp/") and path.parent != Path("/tmp"):

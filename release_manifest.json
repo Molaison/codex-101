@@ -1,12 +1,12 @@
 {
   "codex_channel": "stable",
   "files": {
-    "codex_provider.py": "e89e849c8a728abf049dfd442fde7e231dc17be3f4dfbc8e600701cf64d740af",
+    "codex_provider.py": "3bc67778e8ec17279fa4cebc231079a724b98a37e98f815afda1034ed7baecc8",
     "install-pi.sh": "ec2601616c3d498c5ab840f0bb42ac67c61677f34b48a49b7bc55d2154073394",
     "install.ps1": "f68c88d2a657723dd3302a11dfb5a702fdc9f36d9a65cb2159cf8551cdf18b0b",
     "install.sh": "92d9d38fe05b356b31d4da36e902fbad2c9a2f06e8745d42938fabd94cf435af",
     "install_lifecycle.py": "de8b009cf6cfdffe9d1452047635dacd266b4e453bfc8e04280a293b8d78111e",
-    "magpie_support.py": "6c63faf38b4009d0a246eb322c08edc02cc7db3b04d34ba398f43042e995aeeb",
+    "magpie_support.py": "e87c1939bb8819f6b317310f43ed4c2ec95cb186aedb80afb13a650ef8fc3899",
     "model_catalog.json": "1bf0ce424a2555da5abca3a5f89900e2132c01a1c6ce69d0baff91cccda90f24"
   },
   "release": "v0.2.1",

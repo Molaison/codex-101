@@ -71,6 +71,16 @@ class MagpieOnboardingTests(unittest.TestCase):
         self.config = connector.config_path()
         self.config.write_text(self.original_config, encoding="utf-8")
 
+    def test_per_node_checks_do_not_reuse_another_nodes_readiness(self):
+        connection = {"magpie_per_node": True}
+        with mock.patch.object(connector.socket,"getfqdn",return_value="node-a.fixture"):
+            first=connector.checks_directory(connection)
+        with mock.patch.object(connector.socket,"getfqdn",return_value="node-b.fixture"):
+            second=connector.checks_directory(connection)
+        self.assertNotEqual(first,second)
+        self.assertEqual(first.parent,second.parent)
+        self.assertEqual(connector.checks_directory({},per_node=False),connector.state_directory()/"checks")
+
     def gateway_module(self, prepare):
         module = types.ModuleType("magpie_support")
         module.prepare = prepare

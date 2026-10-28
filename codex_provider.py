@@ -1983,9 +1983,20 @@ def check_worker(directory):
     private_json(record_path, record)
 
 
+def checks_directory(connection=None, per_node=None):
+    """A successful check on one loopback daemon cannot qualify another node."""
+    if per_node is None:
+        per_node = (connection or saved_connection() or {}).get("magpie_per_node", False)
+    root = state_directory() / "checks"
+    if per_node:
+        node = hashlib.sha256(socket.getfqdn().lower().encode("utf-8")).hexdigest()[:24]
+        root = root / "nodes" / node
+    return root
+
+
 def model_check(binary, connection, catalog, model, retry=False, wait_seconds=600,
                 native=False, reasoning_effort=None):
-    root = state_directory() / "checks"
+    root = checks_directory(connection)
     secure_directory(root)
     active = root / "current.json"
     observed = active.read_text(encoding="utf-8") if active.exists() else None
@@ -2160,8 +2171,8 @@ def doctor(arguments, prepared=None):
         if args.check:
             print("正在检查真实只读工具调用，最多等待 10 分钟；超时保留原回合，用同一命令查询。", file=sys.stderr)
             report.update(model_check(binary, connection, catalog, model, retry=args.retry_check))
-        elif (state_directory() / "checks/current.json").exists():
-            current = json.loads((state_directory() / "checks/current.json").read_text(encoding="utf-8"))
+        elif (checks_directory(connection) / "current.json").exists():
+            current = json.loads((checks_directory(connection) / "current.json").read_text(encoding="utf-8"))
             report["last_check"] = check_result(Path(current["directory"]))
             report["last_check"]["same_connection"] = (current["url"] == connection["url"]
                 and current.get("generation") == connection.get("generation") and current.get("binary") == binary
@@ -2274,7 +2285,8 @@ def native_setup(arguments):
     previous = saved_connection()
     retry_failed = False
     # Never rotate a credential or route underneath an unfinished accepted check.
-    active = state_directory() / "checks/current.json"
+    per_node = bool(args.magpie and getattr(load_magpie_support(), "node_mode", lambda: False)())
+    active = checks_directory(previous, per_node=per_node) / "current.json"
     if active.exists():
         pending = json.loads(active.read_text(encoding="utf-8"))
         result = check_result(Path(pending["directory"]))
@@ -2412,7 +2424,8 @@ def native_setup(arguments):
             private_json(state_directory() / "native-installation.json", failure)
             print(json.dumps(failure, ensure_ascii=False))
             return 1
-        connection.update(gateway_provider_id=gateway_provider_id, gateway_url=prepared_url)
+        connection.update(gateway_provider_id=gateway_provider_id, gateway_url=prepared_url,
+                          magpie_per_node=bool(prepared.get("per_node")))
         catalog = qualified_catalog
         check_model = "cpr/" + raw_check_model
         # The saved connection keeps the raw CPR catalog. Only this native write
