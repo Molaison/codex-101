@@ -2,7 +2,7 @@
 
 在自己的 Windows、macOS 或 Linux 电脑上，用个人 CPR Key 一次安装官方 Codex 和 Magpie，并连接实验室 CPR。无需 SSH 到维护机，也无需安装 Node.js/npm 或手写配置。
 
-> 本次版本为 v0.2.1 preview；发布后以下 main 入口会选择附件完整的公开 Release（稳定版优先，否则取最新预发布），并打印选中的 tag 与原因。[v0.2.0 preview](https://github.com/Molaison/codex-101/releases/tag/v0.2.0) 是历史版本。
+> [v0.2.1 preview 已发布](https://github.com/Molaison/codex-101/releases/tag/v0.2.1)，源码版本为 `ff893e7`；以下 main 入口选择附件完整的公开 Release（稳定版优先，否则取最新预发布），并打印选中的 tag 与原因。[v0.2.0 preview](https://github.com/Molaison/codex-101/releases/tag/v0.2.0) 是历史版本。
 
 ## 安装并开始使用
 
@@ -85,8 +85,8 @@ Windows 命令、仅升级 Codex、离线回滚及路径说明见 [升级与恢�
 - **官方客户端 smoke test**：CI 在 Windows、macOS、Ubuntu 下载经 npm SHA512 校验的 stable 包并运行版本检查；不使用 CPR Key，不调用模型。
 - **真实服务验收**：必须由最终安装的客户端，用对应地址和个人 Key 完成真实文件读取、内容匹配及成功回合。`/models`、下载校验、`--version` 和 CI 通过均不能替代它。
 
-本次运行验收中，f102 和 f100 各自通过 Sol / `high` 真实文件读取；f100 验收时 f102 测试守护进程已停止。f102 的 `--magpie --reconfigure` 使用官方 Codex 0.164.0 返回 `[READY]`、退出成功，并以 DeepSeek Flash / `none` 完成真实读取，保存的默认值仍为 Sol / `high`。该安装测试复用了官方客户端，并使用临时 SQLite 路径和私下注入的 Key；网络、配置和自检均为真实操作。
+本次运行验收中，f102 和 f100 各自通过 Sol / `high` 真实文件读取；f100 验收时 f102 测试守护进程已停止。两节点的原生安装自检均返回 `[READY]`，以 DeepSeek Flash / `none` 完成真实读取，保存的默认值仍为 Sol / `high`；f102 的 `--magpie --reconfigure` 使用官方 Codex 0.164.0 并成功退出。该安装测试复用了官方客户端，并使用临时 SQLite 路径和私下注入的 Key；网络、配置和自检均为真实操作。
 
-Pi 1.4.0 的隔离安装配置、Sol 模型列表及 Sol / `high`、Flash / `off` 真实文件读取均已通过。本次 main 的 CI 和 v0.2.1 发布仍待完成；结果见 [GitHub Actions](https://github.com/Molaison/codex-101/actions)。
+Pi 1.4.0 的隔离安装配置、Sol 模型列表及 Sol / `high`、Flash / `off` 真实文件读取均已通过。[main CI](https://github.com/Molaison/codex-101/actions/runs/40630318869) 的六项检查均已通过。[Release 工作流](https://github.com/Molaison/codex-101/actions/runs/40630372806) 的七项检查均已通过，包括 preview 发布。
 
 本项目演进自 [codex-provider-connect](https://github.com/Molaison/codex-provider-connect)；`codex_provider.py` 保留兼容入口。本文面向 `--magpie` 实验室预设。

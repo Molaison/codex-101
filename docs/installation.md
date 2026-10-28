@@ -1,6 +1,6 @@
 # 安装、配置与模型选择
 
-本文面向 **codex-101 v0.2.1 preview 的 `--magpie` 预设**。先按 [README 的安装命令](../README.md#安装并开始使用) 操作；本文解释前置条件、默认行为、模型选择和常见故障。
+本文面向已发布的 **[codex-101 v0.2.1 preview](https://github.com/Molaison/codex-101/releases/tag/v0.2.1) 的 `--magpie` 预设**（源码 `ff893e7`）。[main CI](https://github.com/Molaison/codex-101/actions/runs/40630318869) 六项和 [Release 工作流](https://github.com/Molaison/codex-101/actions/runs/40630372806) 七项检查均通过。先按 [README 的安装命令](../README.md#安装并开始使用) 操作；本文解释前置条件、默认行为、模型选择和常见故障。
 
 ## 1. 安装前准备
 
@@ -18,7 +18,7 @@
 
 Linux 上安装器自动检测 HOME 是否位于 Lustre。在每个需要使用 Codex 的节点各运行一次 [README 中的安装命令](../README.md#安装并开始使用)；每个节点都需要可用的 systemd 用户服务，并独立运行 `codex101-magpie.service`。共享 HOME 保存安装所需的持久配置种子和 Codex 配置。
 
-各节点的服务启动时，在本节点 `/tmp` 下按用户 UID 创建私有运行配置、缓存、数据、状态和锁。Codex 连接本节点 localhost，所有节点使用同一个 Codex101 专用端口；已有普通 Magpie 的 3425 端口和服务不受影响。共享 HOME 的 f102 和 f100 已各自通过 Sol / `high` 真实文件读取；f100 验收时 f102 测试守护进程已停止。
+各节点的服务启动时，在本节点 `/tmp` 下按用户 UID 创建私有运行配置、缓存、数据、状态和锁。Codex 连接本节点 localhost，所有节点使用同一个 Codex101 专用端口；已有普通 Magpie 的 3425 端口和服务不受影响。共享 HOME 的 f102 和 f100 已各自通过 Sol / `high` 真实文件读取及 DeepSeek Flash / `none` 原生自检，均返回 `[READY]` 且保存 Sol / `high` 默认值；f100 验收时 f102 测试守护进程已停止。
 
 ### 可选：Pi
 
