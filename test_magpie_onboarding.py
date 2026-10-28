@@ -16,6 +16,8 @@ import codex_provider as connector
 
 MODEL = connector.LAB_CPR_MODEL
 QUALIFIED = "cpr/" + MODEL
+CHECK_MODEL = connector.LAB_CPR_CHECK_MODEL
+CHECK_QUALIFIED = "cpr/" + CHECK_MODEL
 
 
 class MagpieOnboardingTests(unittest.TestCase):
@@ -49,6 +51,13 @@ class MagpieOnboardingTests(unittest.TestCase):
                     "multi_agent_version": "v1", "default_reasoning_level": "medium",
                     "supported_reasoning_levels": [{"effort": "medium"}],
                     "custom_model_field": ["preserve", 23],
+                },
+                {
+                    "slug": CHECK_MODEL, "display_name": "CPR self-check",
+                    "visibility": "list", "supported_in_api": True,
+                    "multi_agent_version": "v1", "default_reasoning_level": "none",
+                    "supported_reasoning_levels": [{"effort": "none"}],
+                    "custom_model_field": {"nested": 13},
                 },
             ],
         }), encoding="utf-8")
@@ -105,7 +114,7 @@ class MagpieOnboardingTests(unittest.TestCase):
             return {"status": "network_ok", "code": "ENDPOINT_OK"}
 
         check = mock.Mock(return_value=check_result or {
-            "status": "passed", "code": "READY", "model": QUALIFIED,
+            "status": "passed", "code": "READY", "model": CHECK_QUALIFIED,
             "endpoint": connector.LAB_CPR_URL,
         })
         stdout, stderr = io.StringIO(), io.StringIO()
@@ -155,10 +164,12 @@ class MagpieOnboardingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(preflight_calls[0][1], MODEL)
         self.assertEqual(preflight_calls[0][0]["url"], connector.LAB_CPR_URL)
+        self.assertEqual(preflight_calls[1][1], CHECK_MODEL)
         self.assertEqual(prepare_calls[0][0], "remote-fixture-key")
-        self.assertEqual(prepare_calls[0][1], [MODEL, "chatgpt-web/other-v1"])
+        self.assertEqual(prepare_calls[0][1], [MODEL, "chatgpt-web/other-v1", CHECK_MODEL])
         self.assertEqual(prepare_calls[0][2], MODEL)
-        self.assertEqual(check.call_args.args[3], QUALIFIED)
+        self.assertEqual(check.call_args.args[3], CHECK_QUALIFIED)
+        self.assertEqual(check.call_args.kwargs["reasoning_effort"], "none")
         self.assertEqual(Path(check.call_args.args[2]).name, "magpie-cpr-models-v1.json")
         self.assertEqual(configure_calls[0][1], QUALIFIED)
         self.assertEqual(Path(configure_calls[0][0]["catalog_file"]).name,
@@ -166,16 +177,21 @@ class MagpieOnboardingTests(unittest.TestCase):
         self.assertEqual(report["endpoint"], connector.LAB_CPR_URL)
         self.assertEqual(report["transport"], "magpie")
         self.assertEqual(report["gateway"], connector.MAGPIE_GATEWAY_URL)
+        self.assertEqual(report["default_model"], MODEL)
+        self.assertEqual(report["check_model"], CHECK_QUALIFIED)
+        self.assertEqual(report["check_reasoning_effort"], "none")
 
         saved = json.loads((connector.state_directory() / "connection.json").read_text())
         self.assertEqual(saved["default_model"], MODEL)
+        self.assertEqual(saved["check_model"], CHECK_MODEL)
+        self.assertEqual(saved["check_reasoning_effort"], "none")
         self.assertEqual(saved["transport"], "magpie")
         raw_catalog_path = saved["catalog_file"]
         self.assertNotEqual(raw_catalog_path,
                             str(connector.state_directory() / "catalogs/magpie-cpr-models-v1.json"))
         self.assertEqual([item["slug"] for item in
                           json.loads(Path(raw_catalog_path).read_text())["models"]],
-                         [MODEL, "chatgpt-web/other-v1"])
+                         [MODEL, "chatgpt-web/other-v1", CHECK_MODEL])
         first_generation = saved["generation"]
 
         qualified = connector.state_directory() / "catalogs/magpie-cpr-models-v1.json"
@@ -253,6 +269,47 @@ class MagpieOnboardingTests(unittest.TestCase):
         self.assertNotIn("READY", output)
         check.assert_not_called()
         self.assertEqual(len(configure_calls), 1)
+
+    def test_check_failure_keeps_saved_default_and_never_reports_ready(self):
+        prepare_calls = []
+        module = self.gateway_module(self.default_prepare(prepare_calls))
+        code, report, configure_calls, check, _, output = self.run_magpie(
+            {"module": module},
+            check_result={
+                "status": "failed", "code": "MODEL_CHECK",
+                "model": CHECK_QUALIFIED,
+                "endpoint": connector.LAB_CPR_URL,
+            },
+        )
+        self.assertEqual(code, 1)
+        self.assertNotEqual(report["status"], "passed")
+        self.assertNotIn('"code": "READY"', output)
+        self.assertEqual(report["model"], QUALIFIED)
+        self.assertEqual(report["default_model"], MODEL)
+        self.assertEqual(report["check_model"], CHECK_QUALIFIED)
+        self.assertEqual(report["check_reasoning_effort"], "none")
+        self.assertEqual(len(configure_calls), 1)
+        check.assert_called_once()
+
+    def test_changed_check_model_rotates_generation_but_default_stays_sol(self):
+        prepare_calls = []
+        module = self.gateway_module(self.default_prepare(prepare_calls))
+        first_code, first, _, _, _, _ = self.run_magpie({"module": module})
+        first_saved = json.loads((connector.state_directory() / "connection.json").read_text())
+        second_code, second, configure_calls, check, _, _ = self.run_magpie(
+            {"module": module},
+            arguments=("--check-model", "chatgpt-web/other-v1"),
+        )
+        second_saved = json.loads((connector.state_directory() / "connection.json").read_text())
+        self.assertEqual((first_code, second_code), (0, 0))
+        self.assertNotEqual(first_saved["generation"], second_saved["generation"])
+        self.assertEqual(first["default_model"], MODEL)
+        self.assertEqual(second["default_model"], MODEL)
+        self.assertEqual(second["check_model"], "cpr/chatgpt-web/other-v1")
+        self.assertEqual(second["check_reasoning_effort"], "medium")
+        self.assertEqual(second_saved["check_model"], "chatgpt-web/other-v1")
+        self.assertEqual(configure_calls[0][1], QUALIFIED)
+        self.assertEqual(check.call_args.args[3], "cpr/chatgpt-web/other-v1")
 
     def test_gateway_validation_accepts_only_fixed_loopback_endpoint(self):
         settings = {

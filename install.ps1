@@ -1,9 +1,9 @@
 # Published at releases/latest/download/install.ps1; payloads stay on one release.
 # codex-provider-connect: user-local native Windows bootstrap; no administrator needed.
-param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [switch]$Repair, [switch]$Reconfigure, [switch]$RestartIfIdle, [switch]$Lab, [switch]$Magpie)
+param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$CheckModel, [switch]$Repair, [switch]$Reconfigure, [switch]$RestartIfIdle, [switch]$Lab, [switch]$Magpie)
 
 & {
-    param([string]$ProviderUrl, [string]$ModelId, [bool]$DoRepair, [bool]$DoReconfigure, [bool]$DoRestartIfIdle, [bool]$DoLab, [bool]$DoMagpie)
+    param([string]$ProviderUrl, [string]$ModelId, [string]$CheckModelId, [bool]$DoRepair, [bool]$DoReconfigure, [bool]$DoRestartIfIdle, [bool]$DoLab, [bool]$DoMagpie)
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -108,6 +108,7 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [switch]$Repair, [
             elseif ($ProviderUrl) { $SetupArguments += @('--url', $ProviderUrl) }
             if ($DoMagpie) { $SetupArguments += '--magpie' }
             if ($ModelId) { $SetupArguments += @('--model', $ModelId) }
+            if ($CheckModelId) { $SetupArguments += @('--check-model', $CheckModelId) }
             & $Python -X utf8 $Manager --root $Root install `
                 --release $Release --payload-dir $PayloadDir -- @SetupArguments
             if ($LASTEXITCODE -ne 0) { throw 'Installation is not READY; run codex101 recover or inspect the staged transaction.' }
@@ -166,6 +167,7 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [switch]$Repair, [
         elseif ($ProviderUrl) { $Arguments += @('--url', $ProviderUrl) }
         if ($DoMagpie) { $Arguments += '--magpie' }
         if ($ModelId) { $Arguments += @('--model', $ModelId) }
+        if ($CheckModelId) { $Arguments += @('--check-model', $CheckModelId) }
         & $Python -X utf8 $Helper @Arguments
         if ($LASTEXITCODE -ne 0) { throw 'Setup is not verified. Re-run the same fixed download command; no READY was issued.' }
         if ($DoLab) {
@@ -198,4 +200,4 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [switch]$Repair, [
     finally {
         Remove-Item -LiteralPath $Temporary -Recurse -Force
     }
-} $Url $Model ([bool]$Repair) ([bool]$Reconfigure) ([bool]$RestartIfIdle) ([bool]$Lab) ([bool]$Magpie)
+} $Url $Model $CheckModel ([bool]$Repair) ([bool]$Reconfigure) ([bool]$RestartIfIdle) ([bool]$Lab) ([bool]$Magpie)

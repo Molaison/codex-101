@@ -34,7 +34,8 @@ import urllib.request
 
 VERSION = "0.2.0"
 LAB_CPR_URL = "https://cpr.molaisonz.dpdns.org/v1"
-LAB_CPR_MODEL = "chatgpt-web/gpt-6-tools-temp"
+LAB_CPR_MODEL = "gpt-6.1-sol"
+LAB_CPR_CHECK_MODEL = "DeepSeek-V4.1-Flash"
 MAGPIE_GATEWAY_URL = "http://127.0.0.1:3425/v1"
 LAB_HTTP_RETRIES = 8
 LAB_STREAM_RETRIES = 12
@@ -1045,7 +1046,7 @@ def native_catalog(connection, binary, v1_only=False):
         # V2 collaboration is prohibited on this cluster; do not relabel unsupported models as V1.
         catalog["models"] = [item for item in models if item.get("multi_agent_version") == "v1"]
         if not any(item["slug"] == LAB_CPR_MODEL for item in catalog["models"]):
-            raise ValueError("当前发布目录缺少实验室 V1 Web Tools 默认模型；未修改配置。")
+            raise ValueError("当前发布目录缺少实验室 V1 默认模型；未修改配置。")
         models = catalog["models"]
     if len({model["slug"] for model in models}) != len(models):
         raise ValueError("维护的 model catalog 包含重复 ID；未改写 Codex 配置。")
@@ -1344,14 +1345,17 @@ def native_configure(binary, connection, model, lab_sqlite=None,
         if lab_sqlite:
             targets.update({"sqlite_home": lab_sqlite,
                             "sandbox_mode": "danger-full-access", "approval_policy": "never",
-                            "model_reasoning_effort": "high",
                             "features.responses_websockets": False,
                             "features.responses_websockets_v2": False,
                             "features.multi_agent_v2.enabled": False,
                             "features.multi_agent_v2_dynamic_tools": False})
         metadata = next(m for m in catalog_models if m["slug"] == model)
         efforts = [item["effort"] for item in metadata.get("supported_reasoning_levels", [])]
-        if not lab_sqlite and config.get("model_reasoning_effort") not in efforts:
+        if lab_sqlite:
+            selected_effort = "high" if "high" in efforts else metadata.get("default_reasoning_level")
+            if selected_effort:
+                targets["model_reasoning_effort"] = selected_effort
+        elif config.get("model_reasoning_effort") not in efforts:
             targets["model_reasoning_effort"] = metadata.get("default_reasoning_level")
         def current(key):
             value = config
@@ -1526,6 +1530,30 @@ def select_model(connection, catalog, requested=None):
     return selected, visible
 
 
+def catalog_model_metadata(catalog, model):
+    models = json.loads(Path(catalog).read_text(encoding="utf-8"))["models"]
+    for metadata in models:
+        if metadata.get("slug") == model:
+            return metadata
+    raise ValueError("所选模型不在当前模型目录中；未提交模型请求。")
+
+
+def model_reasoning_effort(catalog, model, requested=None):
+    metadata = catalog_model_metadata(catalog, model)
+    supported = [item.get("effort") for item in metadata.get("supported_reasoning_levels", [])
+                 if isinstance(item, dict) and isinstance(item.get("effort"), str)]
+    if requested is not None:
+        if requested not in supported:
+            raise ValueError("所选推理强度不受该模型支持；未提交模型请求。")
+        return requested
+    default = metadata.get("default_reasoning_level")
+    if isinstance(default, str) and default:
+        if supported and default not in supported:
+            raise ValueError("模型目录的默认推理强度不在支持列表中；未提交模型请求。")
+        return default
+    return None
+
+
 def check_problem(message):
     """只分类可观察的错误；不猜测 key 或自动绕过网络/权限。"""
     lower = message.lower()
@@ -1552,7 +1580,8 @@ def check_problem(message):
 def check_result(directory):
     record = json.loads((directory / "state.json").read_text(encoding="utf-8"))
     identity = {"model": record["model"], "endpoint": record.get("connection", {}).get("url"),
-                "transport": record.get("connection", {}).get("transport")}
+                "transport": record.get("connection", {}).get("transport"),
+                "reasoning_effort": record.get("reasoning_effort")}
     events = []
     output = directory / "events.jsonl"
     if output.exists():
@@ -1618,7 +1647,8 @@ def check_worker(directory):
     private_json(record_path, record)
 
 
-def model_check(binary, connection, catalog, model, retry=False, wait_seconds=600, native=False):
+def model_check(binary, connection, catalog, model, retry=False, wait_seconds=600,
+                native=False, reasoning_effort=None):
     root = state_directory() / "checks"
     secure_directory(root)
     active = root / "current.json"
@@ -1631,6 +1661,8 @@ def model_check(binary, connection, catalog, model, retry=False, wait_seconds=60
             if (previous["url"] != connection["url"] or result["model"] != model
                     or previous.get("generation") != connection.get("generation")
                     or previous.get("transport") != connection.get("transport")
+                    or (reasoning_effort is not None
+                        and result.get("reasoning_effort") != reasoning_effort)
                     or previous.get("binary") != binary or previous.get("native", False) != native):
                 return {"status": "failed", "code": "CHECK_CONNECTION_CHANGED",
                         "endpoint": connection["url"], "previous_endpoint": previous["url"],
@@ -1672,12 +1704,15 @@ def model_check(binary, connection, catalog, model, retry=False, wait_seconds=60
                                                "-c", "model_providers.provider_connect.stream_max_retries=0"])
             # Native checks exercise the saved permission policy, including network access.
             sandbox_options = [] if native else ["-s", "read-only"]
-            arguments = ([] if native else ["--no-daemon"]) + ["-a", "never"] + sandbox_options + retry_options + [
+            reasoning_options = (["-c", "model_reasoning_effort=" + reasoning_effort]
+                                 if reasoning_effort is not None else [])
+            arguments = ([] if native else ["--no-daemon"]) + ["-a", "never"] + sandbox_options + retry_options + reasoning_options + [
                          "exec", "--json", "--skip-git-repo-check", "--ephemeral", "-C", str(workspace),
                          "-m", model, "-o", str(directory / "final.txt"), prompt]
             private_json(directory / "state.json", {"status": "intent", "created_at": time.time(), "binary": binary,
                          "model": model, "marker": marker, "marker_path": str(target), "arguments": arguments,
-                         "native": native, "connection": {"url": connection["url"], "default_model": model,
+                         "native": native, "reasoning_effort": reasoning_effort,
+                         "connection": {"url": connection["url"], "default_model": model,
                                         "direct": connection.get("direct", False),
                                         "transport": connection.get("transport")}})
             shutil.copyfile(catalog, directory / "models.json")
@@ -1685,6 +1720,7 @@ def model_check(binary, connection, catalog, model, retry=False, wait_seconds=60
             private_json(active, {"directory": str(directory), "url": connection["url"],
                                   "generation": connection.get("generation"),
                                   "transport": connection.get("transport"),
+                                  "reasoning_effort": reasoning_effort,
                                   "binary": binary, "native": native})
             options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS} if os.name == "nt" else {"start_new_session": True}
             worker = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_check-worker", str(directory)],
@@ -1820,6 +1856,7 @@ def native_setup(arguments):
     parser.add_argument("--provider")
     parser.add_argument("--catalog-file", help="维护者提供的本地 Codex model catalog；默认使用安装包内维护的目录")
     parser.add_argument("--model")
+    parser.add_argument("--check-model", help="真实自检使用的 raw model ID；默认沿用选中模型")
     parser.add_argument("--reconfigure", action="store_true")
     parser.add_argument("--upgrade-codex", action="store_true", help="显式升级官方 Codex 到 npm stable latest；默认复用已验证版本")
     parser.add_argument("--repair", action="store_true", help="强制重做已通过的自检；失败终态默认重试，未终止时只恢复原回合")
@@ -1852,17 +1889,19 @@ def native_setup(arguments):
         # client. Require an intentional retry or an explicit connection/model change.
         expected_url = LAB_CPR_URL if args.lab else args.url or (previous or {}).get("url")
         raw_expected = args.model or (LAB_CPR_MODEL if args.lab else (previous or {}).get("default_model"))
-        expected_model = "cpr/" + raw_expected if args.magpie and raw_expected else raw_expected
+        raw_check_expected = args.check_model or (
+            LAB_CPR_CHECK_MODEL if args.lab else raw_expected)
+        expected_model = "cpr/" + raw_check_expected if args.magpie and raw_check_expected else raw_check_expected
+        default_model_unchanged = (
+            (previous is None and args.model is None)
+            or (previous is not None and previous.get("default_model") == raw_expected))
         if (result["status"] == "failed" and result["code"] == "UPSTREAM_READINESS"
                 and result.get("endpoint") == expected_url and result.get("model") == expected_model
+                and default_model_unchanged
                 and not (args.repair or args.reconfigure or args.upgrade_codex or args.skip_check or args.catalog_file
                          or args.provider or args.restart_if_idle)):
             result = native_check_report(result)
             result["hint"] += " 已复用上次失败记录，未重新下载 Codex 或提交模型请求；上游恢复后加 --repair 显式重测。"
-            if args.lab and not args.magpie and expected_model == LAB_CPR_MODEL:
-                result["hint"] += (" 若愿意让 Web 账号保存聊天历史，可以显式改用"
-                                   " --lab --model chatgpt-web/gpt-6-tools-persist；"
-                                   "是否可用仍须对当前 HTTPS 地址完成真实自检。")
             private_json(state_directory() / "native-installation.json", result)
             print(json.dumps(result, ensure_ascii=False))
             return 1
@@ -1897,7 +1936,14 @@ def native_setup(arguments):
                               ((previous or {}).get("default_model")
                                if (previous or {}).get("url") == connection["url"] else None))
     model, _ = select_model(connection, catalog, requested)
-    connection.update(default_model=model, integration="native", api_key=resolved_key(connection), client_version=client_version(binary))
+    raw_check_model = args.check_model or (LAB_CPR_CHECK_MODEL if args.lab else model)
+    check_model, _ = select_model(connection, catalog, raw_check_model)
+    check_reasoning_effort = (
+        model_reasoning_effort(catalog, check_model) if args.lab else None)
+    connection.update(default_model=model, check_model=raw_check_model,
+                      check_reasoning_effort=check_reasoning_effort,
+                      integration="native", api_key=resolved_key(connection),
+                      client_version=client_version(binary))
     if args.magpie:
         connection["transport"] = "magpie"
         connection.pop("gateway_provider_id", None)
@@ -1909,16 +1955,19 @@ def native_setup(arguments):
     repaired_catalog = connection.pop("catalog_repaired", False)
     same = previous and not repaired_catalog and all(previous.get(key) == connection.get(key)
                             for key in ("url", "api_key", "auth_command", "auth_options", "default_model",
-                                        "catalog_file", "integration", "client_version", "transport"))
+                                        "check_model", "check_reasoning_effort", "catalog_file",
+                                        "integration", "client_version", "transport"))
     connection["generation"] = previous.get("generation") if same and previous.get("generation") else secrets.token_hex(12)
-    preflight = native_preflight(connection, model)
-    preflight.update(endpoint=connection["url"], model=model)
-    if preflight["status"] == "failed":
-        private_json(state_directory() / "native-installation.json", preflight)
-        print(json.dumps(preflight, ensure_ascii=False))
-        return 1
+    for preflight_model in dict.fromkeys((model, check_model)):
+        preflight = native_preflight(connection, preflight_model)
+        if preflight["status"] == "failed":
+            preflight.update(endpoint=connection["url"], model=preflight_model,
+                             default_model=model, check_model=raw_check_model,
+                             check_reasoning_effort=check_reasoning_effort)
+            private_json(state_directory() / "native-installation.json", preflight)
+            print(json.dumps(preflight, ensure_ascii=False))
+            return 1
     gateway_provider = gateway_provider_id = None
-    check_model = model
     magpie_backup = None
     native_connection = connection
     if args.magpie:
@@ -1933,7 +1982,7 @@ def native_setup(arguments):
             magpie_support.prepare(resolved_key(connection), raw_models, model)
             if config_path().is_file():
                 edited_config = config_path().read_bytes()
-            gateway_provider_id, gateway_provider, check_model = magpie_gateway(model)
+            gateway_provider_id, gateway_provider, model = magpie_gateway(model)
             _, qualified_catalog = magpie_catalog(catalog)
         except Exception:
             restored = restore_config_if_unchanged(magpie_backup, edited_config, config_existed)
@@ -1947,7 +1996,10 @@ def native_setup(arguments):
                 "integration": "native", "installer_version": VERSION,
                 "client_version": client_version(binary), "endpoint": connection["url"],
                 "transport": "magpie", "gateway": MAGPIE_GATEWAY_URL,
-                "raw_model": model, "magpie_config_backup": str(magpie_backup) if magpie_backup else None,
+                "raw_model": connection["default_model"], "default_model": connection["default_model"],
+                "check_model": raw_check_model,
+                "check_reasoning_effort": check_reasoning_effort,
+                "magpie_config_backup": str(magpie_backup) if magpie_backup else None,
                 "config_restored": restored, "status": "failed", "code": "MAGPIE_SETUP",
                 "hint": "Magpie 网关准备或配置验证失败；%s，未报告成功。Magpie 安装/gateway 状态需检查；原始日志/Key 未输出。"
                         % config_state,
@@ -1957,7 +2009,7 @@ def native_setup(arguments):
             return 1
         connection.update(gateway_provider_id=gateway_provider_id, gateway_url=MAGPIE_GATEWAY_URL)
         catalog = qualified_catalog
-        model = check_model
+        check_model = "cpr/" + raw_check_model
         # The saved connection keeps the raw CPR catalog. Only this native write
         # uses the qualified catalog, so a rerun cannot prefix slugs twice.
         native_connection = dict(connection, catalog_file=str(qualified_catalog))
@@ -1969,7 +2021,9 @@ def native_setup(arguments):
         integration = native_configure(binary, native_connection, model, lab_sqlite=lab_sqlite)
     private_json(state_directory() / "connection.json", connection)
     report = {"integration": "native", "installer_version": VERSION, "client_version": client_version(binary),
-              "endpoint": connection["url"], "model": model, **integration}
+              "endpoint": connection["url"], "model": model,
+              "default_model": connection["default_model"], "check_model": check_model,
+              "check_reasoning_effort": check_reasoning_effort, **integration}
     if args.magpie:
         report.update(transport="magpie", gateway=MAGPIE_GATEWAY_URL,
                       gateway_provider=gateway_provider_id, raw_model=connection["default_model"],
@@ -1999,9 +2053,15 @@ def native_setup(arguments):
         print(json.dumps(report, ensure_ascii=False))
         return 2
     print("正在通过已保存的原生 codex 配置执行只读工具自检，最多等待%d分钟；超时重跑同一安装命令查询，不重投。" % (20 if args.lab else 10), file=sys.stderr)
-    report.update(native_check_report(model_check(binary, connection, catalog, model,
-                                                 retry=args.repair or retry_failed or not same, native=True,
-                                                 wait_seconds=1200 if args.lab else 600)))
+    report.update(native_check_report(model_check(
+        binary, connection, catalog, check_model,
+        retry=args.repair or retry_failed or not same, native=True,
+        wait_seconds=1200 if args.lab else 600,
+        reasoning_effort=check_reasoning_effort)))
+    # The checked model/test effort must not replace the saved default in reports.
+    report.update(model=model, default_model=connection["default_model"],
+                  check_model=check_model,
+                  check_reasoning_effort=check_reasoning_effort)
     private_json(state_directory() / "native-installation.json", report)
     if report["status"] == "passed":
         if args.lab:

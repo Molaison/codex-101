@@ -425,7 +425,8 @@ class NativeIntegrationTests(unittest.TestCase):
 
     def test_lab_native_config_sets_v1_full_access_and_long_sse_retries(self):
         with mock.patch.object(connector, "NativeRPC", self.rpc_factory()):
-            report = connector.native_configure(["fixture-codex"], self.connection, MODEL,
+            report = connector.native_configure(["fixture-codex"], self.connection,
+                                                connector.LAB_CPR_MODEL,
                                                 lab_sqlite="/tmp/example/codex-sqlite")
         self.assertFalse(report["restart_required"])
         self.assertEqual(self.config["sqlite_home"], "/tmp/example/codex-sqlite")
@@ -442,6 +443,43 @@ class NativeIntegrationTests(unittest.TestCase):
         self.assertFalse(self.config["features"]["multi_agent_v2"]["enabled"])
         self.assertFalse(self.config["features"]["multi_agent_v2_dynamic_tools"])
         self.assertEqual(self.config["projects"]["/example"]["trust_level"], "untrusted")
+
+    def test_lab_native_config_uses_metadata_default_when_high_is_unsupported(self):
+        with mock.patch.object(connector, "NativeRPC", self.rpc_factory()):
+            connector.native_configure(
+                ["fixture-codex"], self.connection,
+                connector.LAB_CPR_CHECK_MODEL,
+                lab_sqlite="/tmp/example/codex-sqlite")
+        self.assertEqual(self.config["model_reasoning_effort"], "none")
+
+    def test_model_check_records_reasoning_effort_and_rejects_changed_effort(self):
+        worker = mock.Mock()
+        worker.wait.return_value = 0
+        initial = {
+            "status": "failed", "code": "MODEL_CHECK",
+            "model": connector.LAB_CPR_CHECK_MODEL,
+            "endpoint": self.connection["url"], "transport": None,
+            "reasoning_effort": "none",
+        }
+        with mock.patch.object(connector.subprocess, "Popen", return_value=worker), \
+                mock.patch.object(connector, "check_result", return_value=initial):
+            result = connector.model_check(
+                ["fixture-codex"], self.connection, self.catalog,
+                connector.LAB_CPR_CHECK_MODEL, wait_seconds=0, native=True,
+                reasoning_effort="none")
+        self.assertEqual(result["reasoning_effort"], "none")
+        record_path = Path(result["record"])
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        self.assertEqual(record["reasoning_effort"], "none")
+        self.assertIn("model_reasoning_effort=none", record["arguments"])
+        current = json.loads((connector.state_directory() / "checks/current.json").read_text())
+        self.assertEqual(current["reasoning_effort"], "none")
+        with mock.patch.object(connector, "check_result", return_value=initial):
+            changed = connector.model_check(
+                ["fixture-codex"], self.connection, self.catalog,
+                connector.LAB_CPR_CHECK_MODEL, wait_seconds=0, native=True,
+                reasoning_effort="high")
+        self.assertEqual(changed["code"], "CHECK_CONNECTION_CHANGED")
 
     def test_running_native_server_reports_stale_catalog_without_polling_or_restart(self):
         with mock.patch.object(connector, "NativeRPC", self.rpc_factory(live=True)):

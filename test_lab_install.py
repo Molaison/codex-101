@@ -1,6 +1,7 @@
 """Bounded offline checks for the cross-platform lab installer preset."""
 
 import json
+import io
 from pathlib import Path
 import os
 import tempfile
@@ -28,7 +29,7 @@ class LabInstallTests(unittest.TestCase):
         self.assertTrue(models)
         self.assertTrue(all(m.get("multi_agent_version") == "v1" for m in models))
         self.assertIn(c.LAB_CPR_MODEL, {m["slug"] for m in models})
-        self.assertNotIn("gpt-6.1-sol", {m["slug"] for m in models})
+        self.assertIn(c.LAB_CPR_CHECK_MODEL, {m["slug"] for m in models})
 
     def test_real_upstream_readiness_failure_is_not_misdiagnosed_as_local_network(self):
         code, hint = c.check_problem("Reconnecting... 1/12 (stream disconnected before completion: ChatGPT personalization preflight exceeded its readiness deadline)")
@@ -39,7 +40,7 @@ class LabInstallTests(unittest.TestCase):
         directory = self.root / "checks/attempt-existing"
         directory.mkdir(parents=True)
         (directory / "state.json").write_text(json.dumps({
-            "status": "terminal", "model": c.LAB_CPR_MODEL, "marker": "CPC-test-END",
+            "status": "terminal", "model": c.LAB_CPR_CHECK_MODEL, "marker": "CPC-test-END",
             "marker_path": str(directory / "marker.txt"), "return_code": 1,
             "connection": {"url": c.LAB_CPR_URL}}))
         (directory / "events.jsonl").write_text(json.dumps({
@@ -52,11 +53,38 @@ class LabInstallTests(unittest.TestCase):
             install.assert_not_called()
             report = json.loads((self.root / "native-installation.json").read_text())
             self.assertEqual(report["code"], "UPSTREAM_READINESS")
-            self.assertIn("chatgpt-web/gpt-6-tools-persist", report["hint"])
             for arguments in (["--lab", "--repair"], ["--lab", "--model", "chatgpt-web/gpt-6-tools-persist"]):
                 with self.assertRaisesRegex(RuntimeError, "attempted a client install"):
                     c.native_setup(arguments)
             self.assertEqual(install.call_count, 2)
+
+    def test_same_explicit_model_ids_do_not_bypass_upstream_failure_cache(self):
+        directory = self.root / "checks/attempt-explicit-same"
+        directory.mkdir(parents=True)
+        (directory / "state.json").write_text(json.dumps({
+            "status": "terminal", "model": c.LAB_CPR_CHECK_MODEL, "marker": "CPC-test-END",
+            "marker_path": str(directory / "marker.txt"), "return_code": 1,
+            "connection": {"url": c.LAB_CPR_URL}}))
+        (directory / "events.jsonl").write_text(json.dumps({
+            "type": "error", "message": "ChatGPT personalization preflight exceeded its readiness deadline"}))
+        (self.root / "checks/current.json").write_text(json.dumps({"directory": str(directory)}))
+        previous = {
+            "url": c.LAB_CPR_URL,
+            "default_model": c.LAB_CPR_MODEL,
+            "check_model": c.LAB_CPR_CHECK_MODEL,
+        }
+        with mock.patch.object(c, "state_directory", return_value=self.root), \
+                mock.patch.object(c, "saved_connection", return_value=previous), \
+                mock.patch.object(c, "official_client",
+                                  side_effect=AssertionError("must reuse cached failure")) as install:
+            code = c.native_setup([
+                "--lab", "--model", c.LAB_CPR_MODEL,
+                "--check-model", c.LAB_CPR_CHECK_MODEL,
+            ])
+        self.assertEqual(code, 1)
+        install.assert_not_called()
+        report = json.loads((self.root / "native-installation.json").read_text())
+        self.assertEqual(report["code"], "UPSTREAM_READINESS")
 
     def test_check_results_identify_the_endpoint_actually_tested(self):
         endpoint = "http://127.0.0.1:18082/v1"
@@ -122,7 +150,14 @@ class LabInstallTests(unittest.TestCase):
 
     def test_lab_mode_selects_official_client_and_passes_contract(self):
         catalog = self.root / "models.json"
-        catalog.write_text(json.dumps({"models": [{"slug": c.LAB_CPR_MODEL, "visibility": "list"}]}))
+        catalog.write_text(json.dumps({"models": [
+            {"slug": c.LAB_CPR_MODEL, "visibility": "list", "supported_in_api": True,
+             "default_reasoning_level": "high",
+             "supported_reasoning_levels": [{"effort": "high"}]},
+            {"slug": c.LAB_CPR_CHECK_MODEL, "visibility": "list", "supported_in_api": True,
+             "default_reasoning_level": "none",
+             "supported_reasoning_levels": [{"effort": "none"}]},
+        ]}))
         captured = {}
 
         def configure(args, **kwargs):
@@ -134,6 +169,11 @@ class LabInstallTests(unittest.TestCase):
             captured.update(binary=binary, model=model, sqlite=lab_sqlite)
             return {"restart_required": False}
 
+        def model_check(*args, **kwargs):
+            captured["check_model"] = args[3]
+            captured["check_reasoning_effort"] = kwargs.get("reasoning_effort")
+            return {"status": "passed", "code": "READY"}
+
         mocks = [
             mock.patch.object(c, "state_directory", return_value=self.root),
             mock.patch.object(c, "saved_connection", return_value=None),
@@ -144,7 +184,7 @@ class LabInstallTests(unittest.TestCase):
             mock.patch.object(c, "client_version", return_value="0.162.1"),
             mock.patch.object(c, "native_preflight", return_value={"status": "network_ok"}),
             mock.patch.object(c, "native_configure", side_effect=native_configure),
-            mock.patch.object(c, "model_check", return_value={"status": "passed", "code": "READY"}),
+            mock.patch.object(c, "model_check", side_effect=model_check),
             mock.patch.object(c, "native_check_report", return_value={"status": "passed", "code": "READY"}),
             mock.patch.object(c, "lab_client_path"),
         ]
@@ -156,12 +196,60 @@ class LabInstallTests(unittest.TestCase):
             self.assertEqual(c.native_setup(["--lab"]), 0)
         self.assertEqual(captured["binary"], ["/verified/official/codex"])
         self.assertEqual(captured["model"], c.LAB_CPR_MODEL)
+        self.assertEqual(captured["check_model"], c.LAB_CPR_CHECK_MODEL)
+        self.assertEqual(captured["check_reasoning_effort"], "none")
         self.assertEqual(captured["sqlite"], "/tmp/example/codex-sqlite")
         self.assertEqual(captured["config_args"], ["--url", c.LAB_CPR_URL])
         self.assertTrue(captured["unrelated_env_key_excluded"])
         report = json.loads((self.root / "native-installation.json").read_text())
         self.assertEqual(report["endpoint"], c.LAB_CPR_URL)
+        self.assertEqual(report["default_model"], c.LAB_CPR_MODEL)
+        self.assertEqual(report["check_model"], c.LAB_CPR_CHECK_MODEL)
+        self.assertEqual(report["check_reasoning_effort"], "none")
+        saved = json.loads((self.root / "connection.json").read_text())
+        self.assertEqual(saved["default_model"], c.LAB_CPR_MODEL)
+        self.assertEqual(saved["check_model"], c.LAB_CPR_CHECK_MODEL)
         self.assertNotIn("never-print-this-test-key", json.dumps(report))
+
+    def test_check_model_preflight_failure_is_not_ready_and_has_no_fallback(self):
+        catalog = self.root / "models.json"
+        catalog.write_text(json.dumps({"models": [
+            {"slug": c.LAB_CPR_MODEL, "visibility": "list", "supported_in_api": True,
+             "default_reasoning_level": "high",
+             "supported_reasoning_levels": [{"effort": "high"}]},
+            {"slug": c.LAB_CPR_CHECK_MODEL, "visibility": "list", "supported_in_api": True,
+             "default_reasoning_level": "none",
+             "supported_reasoning_levels": [{"effort": "none"}]},
+        ]}))
+        calls = []
+
+        def configure(args, **kwargs):
+            return {"url": c.LAB_CPR_URL, "api_key": "fixture-secret"}, catalog
+
+        def preflight(connection, model):
+            calls.append(model)
+            if model == c.LAB_CPR_CHECK_MODEL:
+                return {"status": "failed", "code": "ACCESS"}
+            return {"status": "network_ok", "code": "ENDPOINT_OK"}
+
+        output = io.StringIO()
+        with mock.patch.object(c, "state_directory", return_value=self.root), \
+                mock.patch.object(c, "saved_connection", return_value=None), \
+                mock.patch.object(c, "lab_sqlite_home", return_value="/tmp/example/codex-sqlite"), \
+                mock.patch.object(c, "official_client", return_value=["/verified/official/codex"]), \
+                mock.patch.object(c, "configure", side_effect=configure), \
+                mock.patch.object(c, "client_version", return_value="0.162.1"), \
+                mock.patch.object(c, "native_preflight", side_effect=preflight), \
+                mock.patch.object(c, "native_configure", side_effect=AssertionError("must not configure")), \
+                mock.patch.object(c, "model_check", side_effect=AssertionError("must not check")), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(c.native_setup(["--lab"]), 1)
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["code"], "ACCESS")
+        self.assertEqual(calls, [c.LAB_CPR_MODEL, c.LAB_CPR_CHECK_MODEL])
+        self.assertEqual(report["default_model"], c.LAB_CPR_MODEL)
+        self.assertEqual(report["check_model"], c.LAB_CPR_CHECK_MODEL)
+        self.assertEqual(report["check_reasoning_effort"], "none")
 
     def test_macos_uses_local_temp_sqlite_without_ssh(self):
         parent = self.root / "macos-temp" / getpass.getuser() / "codex-lab"
