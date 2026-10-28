@@ -223,6 +223,22 @@ print(json.dumps({'type':'turn.completed'}))
         self.assertEqual(self.requests, ["/v1/models", "/v1/models"])
         self.assertNotIn(connection["api_key"], json.dumps(rejected))
 
+    def test_native_preflight_client_version_query_keeps_model_access_strict(self):
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            connection = {
+                "url": self.url,
+                "api_key": self.env["CODEX_PROVIDER_API_KEY"],
+                "client_version": "0.162.1",
+            }
+            self.assertEqual(connector.native_preflight(connection, MODEL)["code"], "ENDPOINT_OK")
+            missing = connector.native_preflight(connection, connector.LAB_CPR_MODEL)
+        self.assertEqual(missing["code"], "ACCESS")
+        self.assertEqual(self.requests, [
+            "/v1/models?client_version=0.162.1",
+            "/v1/models?client_version=0.162.1",
+        ])
+        self.assertEqual(self.calls(), 0)
+
     def test_native_preflight_bad_all_proxy_fails_before_any_turn(self):
         with mock.patch.dict(os.environ, {"ALL_PROXY": "http://127.0.0.1:9", "NO_PROXY": ""}, clear=True):
             result = connector.native_preflight({"url": self.url, "api_key": "private-fixture"}, MODEL)

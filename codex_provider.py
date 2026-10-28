@@ -1425,7 +1425,11 @@ def native_preflight(connection, model):
         if scheme not in proxies and proxies.get("all"):
             proxies[scheme] = proxies["all"]
     opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies), NoRedirect())
-    request = urllib.request.Request(connection["url"] + "/models", headers={
+    models_url = connection["url"] + "/models"
+    client_version = str(connection.get("client_version", "")).strip()
+    if client_version:
+        models_url += "?" + urllib.parse.urlencode({"client_version": client_version})
+    request = urllib.request.Request(models_url, headers={
         "Authorization": "Bearer " + resolved_key(connection), "Accept": "application/json"})
     try:
         with opener.open(request, timeout=20) as response:
