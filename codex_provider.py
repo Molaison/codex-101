@@ -372,11 +372,75 @@ def _scalar(raw):
     return raw
 
 
+def _split_toml_top_level(raw, delimiter=","):
+    parts = []
+    start = 0
+    quote = None
+    escaped = False
+    depth = 0
+    for index, character in enumerate(raw):
+        if quote:
+            if escaped:
+                escaped = False
+            elif character == "\\" and quote == '"':
+                escaped = True
+            elif character == quote:
+                quote = None
+            continue
+        if character in "\"'":
+            quote = character
+        elif character in "[{":
+            depth += 1
+        elif character in "]}":
+            depth -= 1
+        elif character == delimiter and depth == 0:
+            parts.append(raw[start:index])
+            start = index + 1
+    parts.append(raw[start:])
+    return parts
+
+
+def _split_toml_assignment(raw):
+    quote = None
+    escaped = False
+    depth = 0
+    for index, character in enumerate(raw):
+        if quote:
+            if escaped:
+                escaped = False
+            elif character == "\\" and quote == '"':
+                escaped = True
+            elif character == quote:
+                quote = None
+            continue
+        if character in "\"'":
+            quote = character
+        elif character in "[{":
+            depth += 1
+        elif character in "]}":
+            depth -= 1
+        elif character == "=" and depth == 0:
+            key = raw[:index].strip()
+            value = raw[index + 1:].strip()
+            if not key or not value:
+                raise ValueError("invalid inline TOML table entry")
+            return key, value
+    raise ValueError("invalid inline TOML table entry")
+
+
 def _value(raw):
     """最小解析里的值：保留鉴权超时等数字类型。"""
     raw = raw.strip()
     if raw.startswith("[") and raw.endswith("]"):
-        return [_scalar(item) for item in raw[1:-1].split(",") if item.strip()]
+        return [_scalar(item) for item in _split_toml_top_level(raw[1:-1]) if item.strip()]
+    if raw.startswith("{") and raw.endswith("}"):
+        result = {}
+        for item in _split_toml_top_level(raw[1:-1]):
+            if not item.strip():
+                continue
+            key, value = _split_toml_assignment(item)
+            result[_scalar(key)] = _value(value)
+        return result
     if re.fullmatch(r"[+-]?[0-9]+", raw):
         return int(raw)
     if raw in ("true", "false"):

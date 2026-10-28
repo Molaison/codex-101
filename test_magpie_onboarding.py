@@ -354,6 +354,9 @@ class MagpieOnboardingTests(unittest.TestCase):
             "name": "Magpie gateway",
             "base_url": connector.MAGPIE_GATEWAY_URL,
             "wire_api": "responses",
+            "http_headers": {
+                "x-openai-actor-authorization": "alpha,beta=gamma",
+            },
             "auth": {
                 "command": "/fixture/magpie-auth",
                 "args": ["codex"],
@@ -414,6 +417,8 @@ class MagpieOnboardingTests(unittest.TestCase):
         self.assertEqual(selected["auth"], gateway_provider["auth"])
         self.assertEqual(selected["base_url"], connector.MAGPIE_GATEWAY_URL)
         self.assertEqual(selected["wire_api"], "responses")
+        self.assertEqual(selected["http_headers"],
+                         {"x-openai-actor-authorization": "alpha,beta=gamma"})
         self.assertEqual(selected["request_max_retries"], connector.LAB_HTTP_RETRIES)
         self.assertEqual(selected["stream_max_retries"], connector.LAB_STREAM_RETRIES)
         self.assertEqual(selected["stream_idle_timeout_ms"], connector.LAB_STREAM_IDLE_TIMEOUT_MS)
