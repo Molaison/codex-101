@@ -81,6 +81,25 @@ class MagpieOnboardingTests(unittest.TestCase):
         self.assertEqual(first.parent,second.parent)
         self.assertEqual(connector.checks_directory({},per_node=False),connector.state_directory()/"checks")
 
+    def test_mode_switch_preserves_running_check_in_previous_directory(self):
+        for old_mode in (False,True):
+            with self.subTest(previous_per_node=old_mode):
+                previous={"magpie_per_node":old_mode}
+                prior=connector.checks_directory(previous)/"current.json"
+                prior.parent.mkdir(parents=True,exist_ok=True)
+                prior.write_text(json.dumps({"directory":str(self.home/"old-check")}))
+                support=types.SimpleNamespace(node_mode=lambda:not old_mode)
+                with mock.patch.object(connector,"saved_connection",return_value=previous), \
+                        mock.patch.object(connector,"load_magpie_support",return_value=support), \
+                        mock.patch.object(connector,"check_result",return_value={"status":"running","code":"CHECK_RUNNING"}), \
+                        mock.patch.object(connector,"native_check_report",side_effect=lambda value:value), \
+                        mock.patch.object(connector,"official_client") as install, \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(connector.native_setup(["--lab"] if old_mode else ["--magpie"]),2)
+                install.assert_not_called()
+                self.assertTrue(prior.exists())
+                prior.unlink()
+
     def gateway_module(self, prepare):
         module = types.ModuleType("magpie_support")
         module.prepare = prepare

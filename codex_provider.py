@@ -2287,6 +2287,15 @@ def native_setup(arguments):
     # Never rotate a credential or route underneath an unfinished accepted check.
     per_node = bool(args.magpie and getattr(load_magpie_support(), "node_mode", lambda: False)())
     active = checks_directory(previous, per_node=per_node) / "current.json"
+    prior_active = checks_directory(previous or {}) / "current.json"
+    if prior_active != active and prior_active.exists():
+        prior = json.loads(prior_active.read_text(encoding="utf-8"))
+        prior_result = check_result(Path(prior["directory"]))
+        if prior_result["status"] == "running":
+            prior_result = native_check_report(prior_result)
+            private_json(state_directory() / "native-installation.json", prior_result)
+            print(json.dumps(prior_result, ensure_ascii=False))
+            return 2
     if active.exists():
         pending = json.loads(active.read_text(encoding="utf-8"))
         result = check_result(Path(pending["directory"]))
@@ -2359,6 +2368,7 @@ def native_setup(arguments):
         connection.pop("gateway_provider_id", None)
         connection.pop("gateway_url", None)
     else:
+        connection.pop("magpie_per_node", None)
         connection.pop("transport", None)
         connection.pop("gateway_provider_id", None)
         connection.pop("gateway_url", None)
