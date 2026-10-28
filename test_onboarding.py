@@ -14,6 +14,8 @@ import tarfile
 import tempfile
 import threading
 import unittest
+import urllib.request
+import urllib.error
 from unittest import mock
 
 import codex_provider as connector
@@ -224,6 +226,22 @@ print(json.dumps({'type':'turn.completed'}))
         self.assertEqual(self.requests, ["/v1/models", "/v1/models"])
         self.assertNotIn(connection["api_key"], json.dumps(rejected))
 
+    def test_native_preflight_client_version_query_keeps_model_access_strict(self):
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            connection = {
+                "url": self.url,
+                "api_key": self.env["CODEX_PROVIDER_API_KEY"],
+                "client_version": "0.162.1",
+            }
+            self.assertEqual(connector.native_preflight(connection, MODEL)["code"], "ENDPOINT_OK")
+            missing = connector.native_preflight(connection, connector.LAB_CPR_MODEL)
+        self.assertEqual(missing["code"], "ACCESS")
+        self.assertEqual(self.requests, [
+            "/v1/models?client_version=0.162.1",
+            "/v1/models?client_version=0.162.1",
+        ])
+        self.assertEqual(self.calls(), 0)
+
     def test_native_preflight_bad_all_proxy_fails_before_any_turn(self):
         with mock.patch.dict(os.environ, {"ALL_PROXY": "http://127.0.0.1:9", "NO_PROXY": ""}, clear=True):
             result = connector.native_preflight({"url": self.url, "api_key": "private-fixture"}, MODEL)
@@ -245,18 +263,18 @@ print(json.dumps({'type':'turn.completed'}))
         self.body = b"<html><title>502 Bad Gateway</title></html>"
         with mock.patch.dict(os.environ, self.env, clear=True):
             result = connector.native_preflight({"url": self.url, "api_key": "private-fixture"}, MODEL)
-        self.assertEqual((result["code"], result["reason"], result["attempts"]), ("NETWORK", "body", 1))
+        self.assertEqual((result["code"], result["reason"], result["attempts"]), ("ENDPOINT", "body", 1))
         self.assertIn("Bad Gateway", result["detail"])
         self.assertIn("不是本机断网", result["hint"])
         self.assertNotIn("private-fixture", json.dumps(result))
 
     def test_preflight_command_retests_without_touching_saved_configuration(self):
-        checked = self.run_cli("preflight", "--url", self.url, "--json")
+        checked = self.run_cli("preflight", "--url", self.url, "--model", MODEL, "--json")
         self.assertEqual(checked.returncode, 0, checked.stderr + checked.stdout)
         self.assertEqual(json.loads(checked.stdout)["code"], "ENDPOINT_OK")
         self.assertFalse((self.home / "codex-home/provider-connect/connection.json").exists())
         self.body = b"<html>gateway page</html>"
-        failed = self.run_cli("preflight", "--url", self.url, "--json")
+        failed = self.run_cli("preflight", "--url", self.url, "--model", MODEL, "--json")
         self.assertEqual(failed.returncode, 1)
         report = json.loads(failed.stdout)
         self.assertEqual(report["reason"], "body")
@@ -268,6 +286,39 @@ print(json.dumps({'type':'turn.completed'}))
         self.assertIn("preflight", command)
         self.assertIn("https://cpr.example.invalid/v1", command)
         self.assertIn(MODEL, command)
+
+
+class CurlFallbackTests(unittest.TestCase):
+    def test_fallback_keeps_secret_in_stdin_and_tls_checks(self):
+        secret = "private-fixture-token"
+        result = subprocess.CompletedProcess([], 0, b'{"data":[]}\nCPC_HTTP_STATUS:200', b'')
+        with mock.patch.object(connector.shutil, "which", return_value="/usr/bin/curl"), \
+                mock.patch.object(connector.subprocess, "run", return_value=result) as run:
+            self.assertEqual(connector._preflight_curl_get("https://fixture.invalid/v1/models", secret, {"https":"http://proxy.invalid:8080"}), (200,b'{"data":[]}'))
+        argv=run.call_args.args[0]
+        self.assertNotIn(secret, " ".join(argv))
+        self.assertNotIn("--insecure", argv)
+        self.assertNotIn("--location", argv)
+        self.assertIn(secret.encode(),run.call_args.kwargs["input"])
+        self.assertIn(b"proxy.invalid",run.call_args.kwargs["input"])
+
+    def test_auth_error_never_falls_back(self):
+        request=urllib.request.Request("https://fixture.invalid/v1/models")
+        opener=mock.Mock()
+        opener.open.side_effect=urllib.error.HTTPError(request.full_url,401,"Unauthorized",None,None)
+        with mock.patch.object(connector,"_preflight_curl_get") as curl:
+            with self.assertRaises(urllib.error.HTTPError):
+                connector._preflight_get(opener,request,"fixture",{})
+        curl.assert_not_called()
+
+    def test_transport_error_uses_same_url_and_key(self):
+        request=urllib.request.Request("https://fixture.invalid/v1/models?client_version=0.165.0")
+        opener=mock.Mock()
+        opener.open.side_effect=urllib.error.URLError("TLS fixture")
+        with mock.patch.object(connector,"_preflight_curl_get",return_value=(200,b"{}")) as curl:
+            result=connector._preflight_get(opener,request,"fixture",{"https":"proxy"})
+        self.assertEqual(result,(200,b"{}","curl"))
+        curl.assert_called_once_with(request.full_url,"fixture",{"https":"proxy"},False)
 
 
 class OfficialInstallTests(unittest.TestCase):
@@ -473,7 +524,8 @@ class NativeIntegrationTests(unittest.TestCase):
 
     def test_lab_native_config_sets_v1_full_access_and_long_sse_retries(self):
         with mock.patch.object(connector, "NativeRPC", self.rpc_factory()):
-            report = connector.native_configure(["fixture-codex"], self.connection, MODEL,
+            report = connector.native_configure(["fixture-codex"], self.connection,
+                                                connector.LAB_CPR_MODEL,
                                                 lab_sqlite="/tmp/example/codex-sqlite")
         self.assertFalse(report["restart_required"])
         self.assertEqual(self.config["sqlite_home"], "/tmp/example/codex-sqlite")
@@ -490,6 +542,43 @@ class NativeIntegrationTests(unittest.TestCase):
         self.assertFalse(self.config["features"]["multi_agent_v2"]["enabled"])
         self.assertFalse(self.config["features"]["multi_agent_v2_dynamic_tools"])
         self.assertEqual(self.config["projects"]["/example"]["trust_level"], "untrusted")
+
+    def test_lab_native_config_uses_metadata_default_when_high_is_unsupported(self):
+        with mock.patch.object(connector, "NativeRPC", self.rpc_factory()):
+            connector.native_configure(
+                ["fixture-codex"], self.connection,
+                connector.LAB_CPR_CHECK_MODEL,
+                lab_sqlite="/tmp/example/codex-sqlite")
+        self.assertEqual(self.config["model_reasoning_effort"], "none")
+
+    def test_model_check_records_reasoning_effort_and_rejects_changed_effort(self):
+        worker = mock.Mock()
+        worker.wait.return_value = 0
+        initial = {
+            "status": "failed", "code": "MODEL_CHECK",
+            "model": connector.LAB_CPR_CHECK_MODEL,
+            "endpoint": self.connection["url"], "transport": None,
+            "reasoning_effort": "none",
+        }
+        with mock.patch.object(connector.subprocess, "Popen", return_value=worker), \
+                mock.patch.object(connector, "check_result", return_value=initial):
+            result = connector.model_check(
+                ["fixture-codex"], self.connection, self.catalog,
+                connector.LAB_CPR_CHECK_MODEL, wait_seconds=0, native=True,
+                reasoning_effort="none")
+        self.assertEqual(result["reasoning_effort"], "none")
+        record_path = Path(result["record"])
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        self.assertEqual(record["reasoning_effort"], "none")
+        self.assertIn("model_reasoning_effort=none", record["arguments"])
+        current = json.loads((connector.state_directory() / "checks/current.json").read_text())
+        self.assertEqual(current["reasoning_effort"], "none")
+        with mock.patch.object(connector, "check_result", return_value=initial):
+            changed = connector.model_check(
+                ["fixture-codex"], self.connection, self.catalog,
+                connector.LAB_CPR_CHECK_MODEL, wait_seconds=0, native=True,
+                reasoning_effort="high")
+        self.assertEqual(changed["code"], "CHECK_CONNECTION_CHANGED")
 
     def test_running_native_server_reports_stale_catalog_without_polling_or_restart(self):
         with mock.patch.object(connector, "NativeRPC", self.rpc_factory(live=True)):
@@ -670,7 +759,7 @@ class NativeIntegrationTests(unittest.TestCase):
         source.mkdir()
         (source / "model_catalog.json").write_text('{"models":[{"slug":"fixture"}]}')
         (source / "codex_provider.py").write_text('''# codex-provider-connect\nVERSION = "%s"\nimport sys\nassert sys.argv[1] == "_native-setup"\nassert "--url" in sys.argv\nprint("fixture setup passed")\n''' % "0.1.1")
-        env = dict(os.environ, PATH=os.environ.get("PATH", "/usr/bin:/bin"),
+        env = dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin"),
                    CODEX_CONNECT_BASE=source.as_uri(), CODEX_CONNECT_REF="v0.1.1")
         result = subprocess.run(["bash", str(ROOT / "install.sh"), "--url", self.connection["url"]],
                                 env=env, capture_output=True, text=True, timeout=15)

@@ -10,7 +10,7 @@ import codex_provider
 
 
 def manifest(root):
-    filenames = ("install.sh", "install.ps1", "codex_provider.py", "model_catalog.json", "install_lifecycle.py")
+    filenames = ("install.sh", "install.ps1", "codex_provider.py", "model_catalog.json", "install_lifecycle.py", "magpie_support.py", "install-pi.sh")
     return {"schema": 1, "release": "v" + codex_provider.VERSION, "codex_channel": "stable",
             "files": {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in filenames}}
 

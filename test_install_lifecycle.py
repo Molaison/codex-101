@@ -73,6 +73,7 @@ if __name__ == "__main__":
         (source / "codex_provider.py").write_text(fixture, encoding="utf-8")
         (source / "model_catalog.json").write_text('{"models":[{"slug":"fixture"}]}', encoding="utf-8")
         shutil.copyfile(Path(lifecycle.__file__), source / "install_lifecycle.py")
+        (source / "magpie_support.py").write_text("# isolated fixture module\n", encoding="utf-8")
         lifecycle.private_json(source / "release_manifest.json", {
             "schema": 1, "release": tag, "codex_channel": "stable",
             "files": {name: hashlib.sha256((source / name).read_bytes()).hexdigest()

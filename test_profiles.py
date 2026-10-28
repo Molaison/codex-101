@@ -275,6 +275,29 @@ env_key = "MY_PROVIDER_KEY"
         with mock.patch.object(connector, "tomllib", None):
             self.assertEqual(connector.config_provider("ywl"), expected)
 
+    def test_fallback_parser_reads_inline_toml_tables_as_dicts(self):
+        self.write_config(r'''[model_providers.magpie_local]
+name = "Magpie local gateway"
+base_url = "http://127.0.0.1:3425/v1"
+retries = 3
+enabled = true
+args = ["a,b", "c"]
+literal_args = ['C:\temp\', 'a,b=c']
+http_headers = { "x-openai-actor-authorization" = "alpha,beta=gamma", "literal" = 'C:\tmp\a,b=c', "nested" = { "key" = "v,w=x" } }
+''')
+        with mock.patch.object(connector, "tomllib", None):
+            settings = connector.provider_settings()
+        provider = settings["model_providers"]["magpie_local"]
+        self.assertEqual(provider["http_headers"], {
+            "x-openai-actor-authorization": "alpha,beta=gamma",
+            "literal": r"C:\tmp\a,b=c",
+            "nested": {"key": "v,w=x"},
+        })
+        self.assertEqual(provider["args"], ["a,b", "c"])
+        self.assertEqual(provider["literal_args"], ["C:\\temp\\", "a,b=c"])
+        self.assertEqual(provider["retries"], 3)
+        self.assertTrue(provider["enabled"])
+
     def test_configure_reuses_saved_connection_without_prompting(self):
         connector.private_json(self.state() / "connection.json",
                                {"url": "https://example.test/v1", "api_key": "sk-saved"})

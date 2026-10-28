@@ -1,12 +1,14 @@
 {
   "codex_channel": "stable",
   "files": {
-    "codex_provider.py": "8ef139bdce30f4982d599f07e1b51e0835eed1af33e9f13a84f0b88db80bc77f",
-    "install.ps1": "31b04281e4357c39f44d7c0ae48aeaf808a6d4985cce55c6b095f23cff4c0f6f",
-    "install.sh": "91fac7b2dd5bd52ddf110b7514b316c238ebe9d1421c992f6cb34b51328a63cf",
-    "install_lifecycle.py": "46da189e223baa01db70a06fbe003010a12d2b01adbbeea4e924e6e28038937f",
-    "model_catalog.json": "6b3b8d9fb634f69d18018c1f771d5654236cb068d95958230a9aacfaad63ad0b"
+    "codex_provider.py": "e89e849c8a728abf049dfd442fde7e231dc17be3f4dfbc8e600701cf64d740af",
+    "install-pi.sh": "ec2601616c3d498c5ab840f0bb42ac67c61677f34b48a49b7bc55d2154073394",
+    "install.ps1": "f68c88d2a657723dd3302a11dfb5a702fdc9f36d9a65cb2159cf8551cdf18b0b",
+    "install.sh": "92d9d38fe05b356b31d4da36e902fbad2c9a2f06e8745d42938fabd94cf435af",
+    "install_lifecycle.py": "de8b009cf6cfdffe9d1452047635dacd266b4e453bfc8e04280a293b8d78111e",
+    "magpie_support.py": "6c63faf38b4009d0a246eb322c08edc02cc7db3b04d34ba398f43042e995aeeb",
+    "model_catalog.json": "1bf0ce424a2555da5abca3a5f89900e2132c01a1c6ce69d0baff91cccda90f24"
   },
-  "release": "v0.2.0",
+  "release": "v0.2.1",
   "schema": 1
 }

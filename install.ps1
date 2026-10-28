@@ -1,15 +1,16 @@
 # Published at releases/latest/download/install.ps1; payloads stay on one release.
 # codex-provider-connect: user-local native Windows bootstrap; no administrator needed.
-param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHome, [switch]$Repair, [switch]$Reconfigure, [switch]$RestartIfIdle, [switch]$Lab)
+param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$CheckModel, [string]$SqliteHome, [switch]$Repair, [switch]$Reconfigure, [switch]$RestartIfIdle, [switch]$Lab, [switch]$Magpie)
 
 & {
-    param([string]$ProviderUrl, [string]$ModelId, [string]$SelectedSqliteHome, [bool]$DoRepair, [bool]$DoReconfigure, [bool]$DoRestartIfIdle, [bool]$DoLab)
+    param([string]$ProviderUrl, [string]$ModelId, [string]$CheckModelId, [string]$SelectedSqliteHome, [bool]$DoRepair, [bool]$DoReconfigure, [bool]$DoRestartIfIdle, [bool]$DoLab, [bool]$DoMagpie)
     $ErrorActionPreference = 'Stop'
     try {
     $ProgressPreference = 'SilentlyContinue'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     if (-not [Environment]::Is64BitOperatingSystem) { throw '64-bit Windows is required.' }
-    if ($SelectedSqliteHome -and -not $DoLab) { throw '-SqliteHome requires -Lab.' }
+    if ($DoMagpie) { $DoLab = $true }
+    if ($SelectedSqliteHome -and -not $DoLab) { throw '-SqliteHome requires -Lab or -Magpie.' }
 
     $Release = $env:CODEX_CONNECT_REF
     if (-not $Release) {
@@ -52,6 +53,7 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHom
     $Python = if ($env:CODEX_CONNECT_PYTHON) { $env:CODEX_CONNECT_PYTHON } else { Join-Path $Root 'python\python.exe' }
     $Helper = Join-Path $Root 'codex_provider.py'
     $CatalogPath = Join-Path $Root 'model_catalog.json'
+    $MagpieSupport = Join-Path $Root 'magpie_support.py'
     $Stamp = Join-Path $Root 'payload-ref'
     New-Item -ItemType Directory -Force -Path $Root, $Bin | Out-Null
     $Temporary = Join-Path ([IO.Path]::GetTempPath()) ('codex-provider-install-' + [Guid]::NewGuid().ToString('N'))
@@ -99,7 +101,9 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHom
             $Manager = Join-Path $Temporary 'install_lifecycle.py'
             $CachedManager = Join-Path $Root 'install_lifecycle.py'
             $CachedRelease = Join-Path (Join-Path $Root 'releases') $Release
-            if ((Test-Path -LiteralPath $CachedManager) -and (Test-Path -LiteralPath (Join-Path $CachedRelease 'release_manifest.json'))) {
+            if ((Test-Path -LiteralPath $CachedManager) -and
+                (Test-Path -LiteralPath (Join-Path $CachedRelease 'release_manifest.json')) -and
+                (-not $DoMagpie -or (Test-Path -LiteralPath (Join-Path $CachedRelease 'magpie_support.py')))) {
                 & $Python -X utf8 $CachedManager --root $Root verify --release $Release *> $null
                 if ($LASTEXITCODE -eq 0) {
                     $PayloadDir = $CachedRelease
@@ -108,7 +112,7 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHom
                 }
             }
             if ($PayloadDir -eq $Temporary) {
-                foreach ($Name in @('release_manifest.json', 'install_lifecycle.py', 'codex_provider.py', 'model_catalog.json')) {
+                foreach ($Name in @('release_manifest.json', 'install_lifecycle.py', 'codex_provider.py', 'model_catalog.json', 'magpie_support.py')) {
                     Invoke-WebRequest -UseBasicParsing -Uri "$Base/$Name" -TimeoutSec 180 -OutFile (Join-Path $Temporary $Name)
                 }
             }
@@ -118,8 +122,10 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHom
             if ($DoRestartIfIdle) { $SetupArguments += '--restart-if-idle' }
             if ($DoLab) { $SetupArguments += '--lab' }
             elseif ($ProviderUrl) { $SetupArguments += @('--url', $ProviderUrl) }
+            if ($DoMagpie) { $SetupArguments += '--magpie' }
             if ($ModelId) { $SetupArguments += @('--model', $ModelId) }
             if ($SelectedSqliteHome) { $SetupArguments += @('--sqlite-home', $SelectedSqliteHome) }
+            if ($CheckModelId) { $SetupArguments += @('--check-model', $CheckModelId) }
             & $Python -X utf8 $Manager --root $Root install `
                 --release $Release --payload-dir $PayloadDir -- @SetupArguments
             if ($LASTEXITCODE -ne 0) { throw 'Installation is not READY; run codex101 recover or inspect the staged transaction.' }
@@ -129,7 +135,8 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHom
         $ExpectedVersion = 'VERSION = "' + $Release.TrimStart('v') + '"'
         $Cached = $false
         if ($Tagged -and -not $env:CODEX_CONNECT_BASE -and (Test-Path -LiteralPath $Stamp) -and
-            (Test-Path -LiteralPath $Helper) -and (Test-Path -LiteralPath $CatalogPath)) {
+            (Test-Path -LiteralPath $Helper) -and (Test-Path -LiteralPath $CatalogPath) -and
+            (-not $DoMagpie -or (Test-Path -LiteralPath $MagpieSupport))) {
             try {
                 $Parsed = Get-Content -Raw -LiteralPath $CatalogPath | ConvertFrom-Json
                 $Cached = ((Get-Content -Raw -LiteralPath $Stamp).Trim() -eq $Release) -and
@@ -137,6 +144,10 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHom
                     $Parsed.models -and ($Parsed.models.Count -gt 0)
                 if ($Cached) {
                     & $Python -X utf8 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' $Helper
+                    $Cached = $LASTEXITCODE -eq 0
+                }
+                if ($Cached -and $DoMagpie) {
+                    & $Python -X utf8 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' $MagpieSupport
                     $Cached = $LASTEXITCODE -eq 0
                 }
             } catch { $Cached = $false }
@@ -154,8 +165,15 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHom
             Invoke-WebRequest -UseBasicParsing -Uri "$Base/model_catalog.json" -OutFile $Catalog
             $Parsed = Get-Content -Raw -LiteralPath $Catalog | ConvertFrom-Json
             if (-not $Parsed.models -or $Parsed.models.Count -eq 0) { throw 'Invalid model catalog; existing setup was not replaced.' }
+            if ($DoMagpie) {
+                $DownloadMagpie = Join-Path $Temporary 'magpie_support.py'
+                Invoke-WebRequest -UseBasicParsing -Uri "$Base/magpie_support.py" -OutFile $DownloadMagpie
+                & $Python -X utf8 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' $DownloadMagpie
+                if ($LASTEXITCODE -ne 0) { throw 'Downloaded magpie_support.py is not valid Python; nothing was installed.' }
+            }
             Move-Item -Force -LiteralPath $Catalog -Destination $CatalogPath
             Move-Item -Force -LiteralPath $Download -Destination $Helper
+            if ($DoMagpie) { Move-Item -Force -LiteralPath $DownloadMagpie -Destination $MagpieSupport }
             [IO.File]::WriteAllText($Stamp, $Release, [Text.UTF8Encoding]::new($false))
         }
         $Arguments = @('_native-setup')
@@ -164,8 +182,10 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHom
         if ($DoRestartIfIdle) { $Arguments += '--restart-if-idle' }
         if ($DoLab) { $Arguments += '--lab' }
         elseif ($ProviderUrl) { $Arguments += @('--url', $ProviderUrl) }
+        if ($DoMagpie) { $Arguments += '--magpie' }
         if ($ModelId) { $Arguments += @('--model', $ModelId) }
         if ($SelectedSqliteHome) { $Arguments += @('--sqlite-home', $SelectedSqliteHome) }
+        if ($CheckModelId) { $Arguments += @('--check-model', $CheckModelId) }
         & $Python -X utf8 $Helper @Arguments
         if ($LASTEXITCODE -ne 0) { throw 'Setup is not verified. Re-run the same fixed download command; no READY was issued.' }
         if ($DoLab) {
@@ -212,9 +232,11 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHom
             }
         }
         $Retry = "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/Molaison/codex-101/main/install.ps1').Content))"
-        if ($DoLab) { $Retry += ' -Lab' }
+        if ($DoMagpie) { $Retry += ' -Magpie' }
+        elseif ($DoLab) { $Retry += ' -Lab' }
         elseif ($ProviderUrl) { $Retry += " -Url '" + $ProviderUrl.Replace("'", "''") + "'" }
         if ($ModelId) { $Retry += " -Model '" + $ModelId.Replace("'", "''") + "'" }
+        if ($CheckModelId) { $Retry += " -CheckModel '" + $CheckModelId.Replace("'", "''") + "'" }
         if ($SelectedSqliteHome) { $Retry += " -SqliteHome '" + $SelectedSqliteHome.Replace("'", "''") + "'" }
         if ($DoRepair) { $Retry += ' -Repair' }
         if ($DoReconfigure) { $Retry += ' -Reconfigure' }
@@ -222,4 +244,4 @@ param([string]$Url = $env:CODEX_PROVIDER_URL, [string]$Model, [string]$SqliteHom
         Write-Host "[NEXT] 排除错误原因后重试：$Retry"
         throw
     }
-} $Url $Model $SqliteHome ([bool]$Repair) ([bool]$Reconfigure) ([bool]$RestartIfIdle) ([bool]$Lab)
+} $Url $Model $CheckModel $SqliteHome ([bool]$Repair) ([bool]$Reconfigure) ([bool]$RestartIfIdle) ([bool]$Lab) ([bool]$Magpie)

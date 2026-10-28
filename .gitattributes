@@ -5,3 +5,4 @@ codex_provider.py text eol=lf
 install_lifecycle.py text eol=lf
 model_catalog.json text eol=lf
 release_manifest.json text eol=lf
+magpie_support.py text eol=lf
